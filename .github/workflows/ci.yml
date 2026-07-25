@@ -19,7 +19,7 @@ jobs:
       - run: go test ./...
       - run: go test -race ./...
       - run: go test ./... -coverprofile=coverage.out
-      - uses: golangci/golangci-lint-action@v8
+      - uses: golangci/golangci-lint-action@v9
       - run: GOOS=linux GOARCH=amd64 go build ./cmd/safeops-mcp ./cmd/safeops-executor ./cmd/safeopsctl
       - run: GOOS=linux GOARCH=arm64 go build ./cmd/safeops-mcp ./cmd/safeops-executor ./cmd/safeopsctl
       - run: go run ./cmd/safeopsctl validate-config --config configs/config.example.yaml
