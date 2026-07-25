@@ -25,7 +25,7 @@ jobs:
       - run: go run ./cmd/safeopsctl validate-config --config configs/config.example.yaml
       - name: Basic secret scan
         run: |
-          ! grep -RInE --exclude-dir=.git '(AKIA[0-9A-Z]{16}|-----BEGIN PRIVATE KEY-----)' .
+          ! grep -RInE --exclude-dir=.git '(AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY-----)' .
       - name: Forbidden execution patterns
         run: |
           ! grep -RInE --exclude-dir=.git 's[h][[:space:]]+-c|b[a]sh[[:space:]]+-c|e[v]al|exec\.Command\("s[h]"|exec\.Command\("b[a]sh"|NOPASSWD:[[:space:]]*ALL' .
