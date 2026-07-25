@@ -1,0 +1,48 @@
+server:
+  name: host-alpha
+identity:
+  administrator_id: safeops
+database:
+  path: /var/lib/safeops/safeops.db
+socket:
+  path: /run/safeops/safeops.sock
+  group: safeops
+  mode: "0660"
+policies:
+  default: deny
+  destructive_actions: deny
+  approval_expiration: 5m
+  dry_run: false
+limits:
+  operation_timeout: 15s
+  max_log_lines: 200
+  max_tool_output_bytes: 65536
+  max_healthcheck_attempts: 5
+filesystem:
+  disk_paths:
+    root:
+      path: /
+services:
+  service-alpha:
+    unit: app-alpha.service
+    permissions:
+      status: allow
+      logs: allow
+      restart: confirm
+    healthcheck:
+      url: http://127.0.0.1:8080/health
+      timeout: 3s
+      attempts: 5
+      interval: 2s
+  service-beta:
+    unit: another-process.service
+    permissions:
+      status: allow
+      logs: allow
+      restart: confirm
+  database-alpha:
+    unit: database-alpha.service
+    permissions:
+      status: allow
+      logs: allow
+      restart: deny
