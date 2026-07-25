@@ -1,0 +1,15 @@
+{
+  "mcp": {
+    "servers": {
+      "safeops": {
+        "command": "/usr/local/bin/safeops-mcp",
+        "args": [
+          "serve",
+          "--config",
+          "/etc/safeops/config.yaml"
+        ],
+        "transport": "stdio"
+      }
+    }
+  }
+}
