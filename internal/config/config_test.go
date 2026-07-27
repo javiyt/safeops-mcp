@@ -105,6 +105,81 @@ func TestValidateRejectsInvalidPolicyAndLimits(t *testing.T) {
 	}
 }
 
+func TestValidateTelegramConfiguration(t *testing.T) {
+	t.Setenv("SAFEOPS_TELEGRAM_TOKEN", "123456:test-token")
+	cfg := validConfig()
+	cfg.Identity.AdministratorID = "telegram:12345678"
+	cfg.Telegram = TelegramConfig{
+		Enabled:          true,
+		AllowedUsers:     []int64{12345678},
+		AdminID:          12345678,
+		RateLimit:        TelegramRateLimitConfig{MessagesPerMinute: 10},
+		MessageSizeLimit: 4096,
+		Confirmation:     TelegramConfirmationConfig{CodeLength: 4, ExpirationSeconds: 300},
+		OpenClaw:         TelegramOpenClawConfig{Command: "/usr/local/bin/openclaw", Timeout: Duration(30 * time.Second)},
+	}
+	if err := Validate(cfg); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	if got := cfg.TelegramPrincipal(); got != "telegram:12345678" {
+		t.Fatalf("TelegramPrincipal() = %q", got)
+	}
+	if got := cfg.ConfirmationCodeLength(); got != 4 {
+		t.Fatalf("ConfirmationCodeLength() = %d", got)
+	}
+	if got := cfg.ApprovalExpiration(); got != 300*time.Second {
+		t.Fatalf("ApprovalExpiration() = %s", got)
+	}
+}
+
+func TestValidateRejectsInvalidTelegramConfiguration(t *testing.T) {
+	cases := []struct {
+		name   string
+		env    string
+		mutate func(*Config)
+	}{
+		{"missing token env", "", func(cfg *Config) {}},
+		{"inline token", "123456:test-token", func(cfg *Config) {
+			cfg.Telegram.Token = "secret"
+		}},
+		{"admin not allowed", "123456:test-token", func(cfg *Config) {
+			cfg.Telegram.AdminID = 99
+		}},
+		{"identity mismatch", "123456:test-token", func(cfg *Config) {
+			cfg.Identity.AdministratorID = "operator"
+		}},
+		{"bad limit", "123456:test-token", func(cfg *Config) {
+			cfg.Telegram.RateLimit.MessagesPerMinute = 0
+		}},
+		{"bad callback code length", "123456:test-token", func(cfg *Config) {
+			cfg.Telegram.Confirmation.CodeLength = 3
+		}},
+		{"missing openclaw command", "123456:test-token", func(cfg *Config) {
+			cfg.Telegram.OpenClaw.Command = ""
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("SAFEOPS_TELEGRAM_TOKEN", tc.env)
+			cfg := validConfig()
+			cfg.Identity.AdministratorID = "telegram:12345678"
+			cfg.Telegram = TelegramConfig{
+				Enabled:          true,
+				AllowedUsers:     []int64{12345678},
+				AdminID:          12345678,
+				RateLimit:        TelegramRateLimitConfig{MessagesPerMinute: 10},
+				MessageSizeLimit: 4096,
+				Confirmation:     TelegramConfirmationConfig{CodeLength: 4, ExpirationSeconds: 300},
+				OpenClaw:         TelegramOpenClawConfig{Command: "/usr/local/bin/openclaw", Timeout: Duration(30 * time.Second)},
+			}
+			tc.mutate(&cfg)
+			if err := Validate(cfg); err == nil {
+				t.Fatal("Validate() error = nil, want error")
+			}
+		})
+	}
+}
+
 func TestValidateRejectsPermissionAndHealthcheckLimitErrors(t *testing.T) {
 	cfg := validConfig()
 	svc := cfg.Services["service-alpha"]

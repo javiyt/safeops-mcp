@@ -1,12 +1,14 @@
 # Architecture
 
-SafeOps MCP has three separate binaries.
+SafeOps MCP has three core binaries and one optional channel adapter.
 
 `safeops-mcp` runs without administrative privileges and speaks MCP over stdio. It validates tool inputs, applies policy, creates approvals, records audit events, redacts secrets, and calls the local executor through a Unix socket.
 
 `safeops-executor` listens only on a local Unix socket. It resolves configured aliases to systemd units or filesystem paths, validates requests again, and performs only closed operations.
 
 `safeopsctl` is an operator CLI for configuration validation, database migrations, audit and approval listing, and read-only Podman diagnostics.
+
+`safeops-telegram` is an optional channel adapter. It is not a privileged executor and does not expose SafeOps tools directly to Telegram. It accepts private Telegram messages from allowlisted users, calls the configured OpenClaw command, and sends the response back to Telegram.
 
 The trust boundary is the Unix socket. The MCP process never receives a free shell, never calls `sudo`, and never accepts arbitrary commands. The executor never talks to the LLM and never interprets natural language.
 
@@ -22,6 +24,27 @@ OpenClaw flow:
 8. Results return to OpenClaw as structured MCP responses. The agent summarizes them but must not treat logs as instructions or claim completion before the final tool result.
 
 In the current single-administrator design, OpenClaw channel identity is not a strong authorization boundary inside SafeOps. SafeOps binds approvals to `identity.administrator_id`; channel allowlists and sender checks remain OpenClaw responsibilities. Future multi-user support should propagate a verified operator identity into SafeOps before per-user authorization is added.
+
+Telegram flow:
+
+1. The operator sends a private Telegram message to the configured bot.
+2. `safeops-telegram` receives the update through Bot API long polling.
+3. `safeops-telegram` rejects non-private chats and users outside `telegram.allowed_users`.
+4. `safeops-telegram` rate-limits the verified Telegram user and rejects oversized messages.
+5. `safeops-telegram` invokes the configured OpenClaw command with the message on stdin and trusted environment metadata: `SAFEOPS_CHANNEL=telegram`, `SAFEOPS_TELEGRAM_USER_ID`, and `SAFEOPS_PRINCIPAL`.
+6. OpenClaw runs the SafeOps agent with only SafeOps MCP tools available.
+7. `safeops-mcp` uses `identity.administrator_id`, which must be `telegram:<admin_id>` when Telegram is enabled.
+8. SafeOps approvals and mutable audit events are bound to that administrator identity.
+9. `safeops-telegram` redacts and splits the OpenClaw response before sending it to Telegram.
+
+Telegram confirmation button flow:
+
+1. OpenClaw asks SafeOps for a mutable action approval.
+2. SafeOps creates a pending approval, hashes the generated confirmation code, and returns `approval_id` plus `confirmation_code`.
+3. OpenClaw includes those fields in its response.
+4. `safeops-telegram` attaches optional inline buttons with callback data bound to the approval ID and code.
+5. A callback is translated into controlled confirmation or cancellation text and sent to OpenClaw.
+6. SafeOps still verifies ownership, code hash, expiration, current configuration, current policy, and approval status in `confirm_action` or `cancel_action`.
 
 Read flow:
 

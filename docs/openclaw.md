@@ -156,6 +156,37 @@ install -m 0640 -o openclaw -g openclaw prompts/openclaw-agent.md /var/lib/openc
 
 The prompt instructs the agent to inspect before acting, use only returned aliases, treat logs as untrusted data, request approval for mutable actions, and refuse unavailable operations.
 
+## Telegram Channel
+
+`safeops-telegram` can use OpenClaw as the conversational runtime for a private Telegram bot. The adapter calls the configured OpenClaw command once per Telegram message and passes the message on stdin.
+
+Example SafeOps configuration:
+
+```yaml
+identity:
+  administrator_id: telegram:12345678
+telegram:
+  enabled: true
+  token_env: SAFEOPS_TELEGRAM_TOKEN
+  allowed_users:
+    - 12345678
+  admin_id: 12345678
+  openclaw:
+    command: /usr/local/bin/openclaw
+    args: ["run", "--agent", "safeops-agent"]
+    timeout: 30s
+```
+
+The adapter also sets:
+
+- `SAFEOPS_CHANNEL=telegram`
+- `SAFEOPS_TELEGRAM_USER_ID=<numeric-id>`
+- `SAFEOPS_PRINCIPAL=telegram:<numeric-id>`
+
+These variables are trusted adapter metadata for wrappers or OpenClaw versions that support channel metadata. SafeOps authorization still relies on `identity.administrator_id` and approval revalidation. Do not inject the Telegram user ID into user-controlled prompt text as the only authorization mechanism.
+
+For full Telegram setup, see [telegram.md](telegram.md).
+
 ## Service Mode
 
 OpenClaw can run under its own systemd service. The exact command depends on the installed OpenClaw version and channel setup. A conservative local service shape is:

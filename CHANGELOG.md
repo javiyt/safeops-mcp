@@ -4,13 +4,21 @@
 
 ## 0.4.0
 
+- Added `safeops-telegram`, an optional private Telegram long-polling adapter for OpenClaw.
+- Added Telegram configuration validation for token environment variables, allowlisted numeric users, single administrator identity, rate limiting, message limits, confirmation settings, and OpenClaw command settings.
+- Added Telegram channel handling for private-chat enforcement, unauthorized-user rejection, per-user rate limiting, message splitting, redaction, callback parsing, and confirmation/cancellation buttons.
+- Bound Telegram deployments to `identity.administrator_id: telegram:<admin_id>` so approvals and mutable audit rows remain tied to the configured administrator.
+- Documented Telegram setup, OpenClaw channel metadata, security threats, operations, troubleshooting, and manual E2E checks.
+
+## 0.3.0
+
 - Added OpenClaw Phase 3 integration assets: locked-down MCP config, SafeOps agent prompt, optional installer, and E2E checklist.
 - Documented OpenClaw stdio MCP registration, tool policy, approval flow, agent prompt behavior, audit expectations, and final security checks.
 - Hardened MCP tool descriptions with configured-alias, untrusted-log, sensitive-field, and approval warnings.
 - Filtered `list_containers` responses to configured aliases as defense in depth.
 - Added MCP surface tests for unsafe tool exclusion, Podman-optional container tools, untrusted log flags, and OpenClaw-style command denial.
 
-## 0.3.0
+## 0.2.1
 
 - Hardened Podman configuration validation for existing absolute binaries, invalid container names, invalid permissions, and Quadlet units.
 - Propagated process-output byte truncation to `container_logs` responses.
