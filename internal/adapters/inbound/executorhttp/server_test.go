@@ -96,6 +96,28 @@ func TestHandlersRejectBadJSONAndBackendErrors(t *testing.T) {
 	}
 }
 
+func TestHandlersRejectUnknownCommandFields(t *testing.T) {
+	s := &Server{Backend: fakeBackend{}}
+	cases := []struct {
+		name    string
+		handler http.HandlerFunc
+		body    string
+	}{
+		{"service restart command injection", s.handleRestartService, `{"service":"service-alpha","operation_id":"op_1","command":"unexpected"}`},
+		{"container logs extra args", s.handleContainerLogs, `{"container":"container-alpha","lines":1,"extra_args":["--follow"]}`},
+		{"container restart command injection", s.handleRestartContainer, `{"container_alias":"container-alpha","operation_id":"op_1","command":"unexpected"}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			tc.handler(w, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(tc.body)))
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want bad request", w.Code)
+			}
+		})
+	}
+}
+
 type fakeBackend struct {
 	err error
 }

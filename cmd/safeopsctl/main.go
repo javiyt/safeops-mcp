@@ -8,11 +8,20 @@ import (
 	"os/exec"
 	"os/user"
 	"sort"
+	"strings"
 
 	podmanadapter "github.com/javiyt/safeops-mcp/internal/adapters/outbound/linux/podman"
 	"github.com/javiyt/safeops-mcp/internal/adapters/outbound/linux/process"
 	sqlitestore "github.com/javiyt/safeops-mcp/internal/adapters/outbound/sqlite"
 	"github.com/javiyt/safeops-mcp/internal/config"
+	"github.com/javiyt/safeops-mcp/internal/redaction"
+)
+
+var (
+	currentUser   = user.Current
+	lookPath      = exec.LookPath
+	outputf       = fmt.Printf
+	systemctlPath = "/usr/bin/systemctl"
 )
 
 func main() {
@@ -80,32 +89,65 @@ func podman(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	current, _ := user.Current()
-	fmt.Printf("binary\t%s\n", cfg.Podman.Binary)
-	fmt.Printf("mode\t%s\n", cfg.Podman.Mode)
-	fmt.Printf("systemd_scope\t%s\n", cfg.Podman.SystemdScope)
+	current, _ := currentUser()
+	if err := podmanCheckPrintf("binary\t%s\n", cfg.Podman.Binary); err != nil {
+		return err
+	}
+	if err := podmanCheckPrintf("mode\t%s\n", cfg.Podman.Mode); err != nil {
+		return err
+	}
+	if err := podmanCheckPrintf("systemd_scope\t%s\n", cfg.Podman.SystemdScope); err != nil {
+		return err
+	}
 	if current != nil {
-		fmt.Printf("user\t%s\n", current.Username)
+		if err := podmanCheckPrintf("user\t%s\n", current.Username); err != nil {
+			return err
+		}
 	}
 	if cfg.Podman.SystemdScope == "user" {
-		fmt.Printf("XDG_RUNTIME_DIR\t%s\n", os.Getenv("XDG_RUNTIME_DIR"))
-		if loginctl, err := exec.LookPath("loginctl"); err == nil && current != nil {
+		xdgSet := os.Getenv("XDG_RUNTIME_DIR") != ""
+		if err := podmanCheckPrintf("xdg_runtime_dir_set\t%t\n", xdgSet); err != nil {
+			return err
+		}
+		if !xdgSet {
+			return fmt.Errorf("XDG_RUNTIME_DIR is required for user-scoped Quadlets")
+		}
+		if _, err := runner.Run(ctx, systemctlPath, "--user", "show-environment"); err != nil {
+			return fmt.Errorf("systemctl --user access: %w", err)
+		}
+		if err := podmanCheckPrintf("systemctl_user_access\tok\n"); err != nil {
+			return err
+		}
+		if loginctl, err := lookPath("loginctl"); err == nil && current != nil {
 			if out, err := runner.Run(ctx, loginctl, "show-user", current.Username, "--property=Linger", "--value"); err == nil {
-				fmt.Printf("linger\t%s\n", out.Stdout)
+				if err := podmanCheckPrintf("linger\t%s\n", strings.TrimSpace(out.Stdout)); err != nil {
+					return err
+				}
 			}
 		}
 	}
-	fmt.Printf("version_json_bytes\t%d\n", len(version.Stdout))
+	if err := podmanCheckPrintf("version_json_bytes\t%d\n", len(version.Stdout)); err != nil {
+		return err
+	}
 	client := podmanadapter.Client{Binary: cfg.Podman.Binary, Runner: runner}
 	for alias, ctr := range cfg.Containers {
 		st, err := client.InspectContainer(ctx, alias, ctr.ContainerName, ctr.Management)
 		if err != nil {
-			fmt.Printf("container\t%s\terror\t%s\n", alias, err)
+			if err := podmanCheckPrintf("container\t%s\terror\t%s\n", alias, redaction.Redact(err.Error())); err != nil {
+				return err
+			}
 			continue
 		}
-		fmt.Printf("container\t%s\texists=%t\tstate=%s\thealth=%s\n", alias, st.Exists, st.State, st.Health)
+		if err := podmanCheckPrintf("container\t%s\texists=%t\tstate=%s\thealth=%s\n", alias, st.Exists, st.State, st.Health); err != nil {
+			return err
+		}
 	}
 	return nil
+}
+
+func podmanCheckPrintf(format string, args ...any) error {
+	_, err := outputf(format, args...)
+	return err
 }
 
 func containers(ctx context.Context, args []string) error {

@@ -262,8 +262,11 @@ func (s Service) ConfirmAction(ctx context.Context, userID string, input Confirm
 			eventType = "container_restart_simulated"
 		}
 	}
-	if auditErr := s.audit(ctx, userID, eventType, "confirm_action", a.Action, a.NormalizedArguments, "mutating", "require_approval", string(status), a.ID, opID); auditErr != nil && err == nil {
-		err = auditErr
+	if auditErr := s.audit(ctx, userID, eventType, "confirm_action", a.Action, a.NormalizedArguments, "mutating", "require_approval", string(status), a.ID, opID); auditErr != nil {
+		if err != nil {
+			return ConfirmOutput{}, err
+		}
+		_ = s.Approvals.MarkDone(ctx, a.ID, status, resultSummary, "post-operation audit failed: "+redaction.Redact(auditErr.Error()), s.Clock.Now())
 	}
 	if err != nil {
 		return ConfirmOutput{}, err

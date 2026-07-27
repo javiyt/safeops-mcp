@@ -256,6 +256,10 @@ func validatePodman(errs *[]error, cfg Config) {
 	}
 	if !filepath.IsAbs(cfg.Podman.Binary) {
 		*errs = append(*errs, errors.New("podman.binary must be absolute when podman is enabled"))
+	} else if st, err := os.Stat(cfg.Podman.Binary); err != nil {
+		*errs = append(*errs, fmt.Errorf("podman.binary must exist when podman is enabled: %w", err))
+	} else if st.IsDir() {
+		*errs = append(*errs, errors.New("podman.binary must be a file when podman is enabled"))
 	}
 	switch cfg.Podman.Mode {
 	case "rootless", "system":

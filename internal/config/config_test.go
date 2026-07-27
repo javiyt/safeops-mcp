@@ -119,7 +119,7 @@ func TestValidateRejectsPermissionAndHealthcheckLimitErrors(t *testing.T) {
 
 func TestValidatePodmanConfiguration(t *testing.T) {
 	cfg := validConfig()
-	cfg.Podman = PodmanConfig{Enabled: true, Binary: "/usr/bin/podman", Mode: "rootless", SystemdScope: "user"}
+	cfg.Podman = PodmanConfig{Enabled: true, Binary: existingBinary(t), Mode: "rootless", SystemdScope: "user"}
 	cfg.Containers = map[string]ContainerConfig{
 		"container-alpha": {
 			ContainerName: "app-alpha-container",
@@ -152,6 +152,14 @@ func TestValidateRejectsInvalidPodmanConfiguration(t *testing.T) {
 			enablePodmanForTest(cfg)
 			cfg.Podman.Binary = "podman"
 		}},
+		{"missing binary", func(cfg *Config) {
+			enablePodmanForTest(cfg)
+			cfg.Podman.Binary = filepath.Join(t.TempDir(), "missing-podman")
+		}},
+		{"binary is directory", func(cfg *Config) {
+			enablePodmanForTest(cfg)
+			cfg.Podman.Binary = t.TempDir()
+		}},
 		{"unknown mode", func(cfg *Config) {
 			enablePodmanForTest(cfg)
 			cfg.Podman.Mode = "free"
@@ -164,6 +172,18 @@ func TestValidateRejectsInvalidPodmanConfiguration(t *testing.T) {
 			enablePodmanForTest(cfg)
 			item := cfg.Containers["container-alpha"]
 			item.ContainerName = "-bad"
+			cfg.Containers["container-alpha"] = item
+		}},
+		{"container path traversal", func(cfg *Config) {
+			enablePodmanForTest(cfg)
+			item := cfg.Containers["container-alpha"]
+			item.ContainerName = "../bad"
+			cfg.Containers["container-alpha"] = item
+		}},
+		{"container newline", func(cfg *Config) {
+			enablePodmanForTest(cfg)
+			item := cfg.Containers["container-alpha"]
+			item.ContainerName = "bad\nname"
 			cfg.Containers["container-alpha"] = item
 		}},
 		{"quadlet missing unit", func(cfg *Config) {
@@ -179,6 +199,12 @@ func TestValidateRejectsInvalidPodmanConfiguration(t *testing.T) {
 			item.Permissions.Restart = "allow"
 			cfg.Containers["container-alpha"] = item
 		}},
+		{"invalid permission", func(cfg *Config) {
+			enablePodmanForTest(cfg)
+			item := cfg.Containers["container-alpha"]
+			item.Permissions.Logs = "sometimes"
+			cfg.Containers["container-alpha"] = item
+		}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -192,7 +218,8 @@ func TestValidateRejectsInvalidPodmanConfiguration(t *testing.T) {
 }
 
 func enablePodmanForTest(cfg *Config) {
-	cfg.Podman = PodmanConfig{Enabled: true, Binary: "/usr/bin/podman", Mode: "rootless", SystemdScope: "user"}
+	binary, _ := os.Executable()
+	cfg.Podman = PodmanConfig{Enabled: true, Binary: binary, Mode: "rootless", SystemdScope: "user"}
 	cfg.Containers = map[string]ContainerConfig{
 		"container-alpha": {
 			ContainerName: "app-alpha-container",
@@ -202,6 +229,15 @@ func enablePodmanForTest(cfg *Config) {
 			Health:        ContainerHealthConfig{Attempts: 3, Interval: Duration(time.Second)},
 		},
 	}
+}
+
+func existingBinary(t *testing.T) string {
+	t.Helper()
+	binary, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return binary
 }
 
 func validConfig() Config {

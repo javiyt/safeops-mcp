@@ -81,11 +81,12 @@ func (c Client) Logs(ctx context.Context, name string, lines int, since string) 
 	if len(rawLines) == 1 && rawLines[0] == "" {
 		rawLines = nil
 	}
+	truncated := res.StdoutTruncated
 	entries := make([]ports.ContainerLogEntry, 0, len(rawLines))
 	for _, line := range rawLines {
 		entries = append(entries, ports.ContainerLogEntry{Stream: "stdout", Message: redaction.Redact(line)})
 	}
-	return entries, false, nil
+	return entries, truncated, nil
 }
 
 func (c Client) Restart(ctx context.Context, name string) error {

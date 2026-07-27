@@ -96,7 +96,13 @@ containers:
       restart: confirm
 ```
 
+When `podman.enabled` is true, `podman.binary` must be an absolute path to an existing executable file. Container names and Quadlet units are validated strictly; aliases are the only names accepted by MCP tools.
+
 When `podman.enabled` is false, Podman MCP tools are not advertised.
+
+`container_logs` applies the configured per-container `logs.max_lines` limit, the global `limits.max_log_lines` ceiling, and the global `limits.max_tool_output_bytes` process-output limit. Returned logs are redacted, marked as untrusted content, and set `truncated: true` when the byte limit cuts output.
+
+`container_status` uses `podman inspect`, but returns only selected status fields. It does not return environment variables, command arguments, full labels, mounts, credentials, or Quadlet file contents.
 
 ## Running
 
@@ -143,6 +149,10 @@ Agent: The latest errors contain repeated timeouts while contacting Telegram. Lo
 User: Restart `container-alpha`.
 
 Agent: Restarting `container-alpha` requires confirmation. Reply with the confirmation code before it expires.
+
+User: Restart `workload-alpha`.
+
+Agent: Restarting `workload-alpha` requires confirmation. SafeOps will restart the configured Quadlet unit with the configured systemd scope after confirmation.
 
 ## Dry-Run
 

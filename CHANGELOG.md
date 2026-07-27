@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.3.0
+
+- Hardened Podman configuration validation for existing absolute binaries, invalid container names, invalid permissions, and Quadlet units.
+- Propagated process-output byte truncation to `container_logs` responses.
+- Documented and tested sanitized Podman inspect handling so status responses omit environment variables, command arguments, mounts, and credentials.
+- Tightened container restart health handling for `not_configured`, `unhealthy`, and `require_healthy_after_restart` behavior.
+- Added tests for persistent resource locks, TOCTOU revalidation, strict executor JSON decoding, Quadlet systemd scope usage, and Podman diagnostics.
+- Updated Podman, Quadlet, OpenClaw, operations, architecture, and security documentation.
+
 ## 0.2.0
 
 - Added configured Podman container status, logs, and confirmed restart support.
