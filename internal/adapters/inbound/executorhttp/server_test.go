@@ -103,7 +103,7 @@ func TestHandlersRejectUnknownCommandFields(t *testing.T) {
 		handler http.HandlerFunc
 		body    string
 	}{
-		{"service restart command injection", s.handleRestartService, `{"service":"service-alpha","operation_id":"op_1","command":"sh -c id"}`},
+		{"service restart command injection", s.handleRestartService, `{"service":"service-alpha","operation_id":"op_1","command":"unexpected"}`},
 		{"container logs extra args", s.handleContainerLogs, `{"container":"container-alpha","lines":1,"extra_args":["--follow"]}`},
 		{"container restart command injection", s.handleRestartContainer, `{"container_alias":"container-alpha","operation_id":"op_1","command":"podman exec"}`},
 	}
