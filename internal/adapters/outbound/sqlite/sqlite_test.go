@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/javiyt/safeops-mcp/internal/domain/alert"
 	"github.com/javiyt/safeops-mcp/internal/domain/approval"
 	"github.com/javiyt/safeops-mcp/internal/domain/audit"
 )
@@ -188,6 +189,69 @@ func TestOperationLocksRejectConcurrentMutableActions(t *testing.T) {
 	}
 	if err := store.AcquireOperationLock(ctx, "container", "container-alpha", "op_after", time.Now().Add(time.Minute)); err != nil {
 		t.Fatalf("lock was not released after operation: %v", err)
+	}
+}
+
+func TestAlertRepositoryLifecycle(t *testing.T) {
+	store := migratedStore(t)
+	ctx := context.Background()
+	now := time.Date(2026, 7, 27, 10, 0, 0, 0, time.UTC)
+	finding := alert.Finding{
+		ResourceKind:  "service",
+		ResourceAlias: "service-a",
+		Type:          "service_stopped",
+		Severity:      alert.SeverityCritical,
+		Message:       "Service service-a is inactive.",
+		Metadata:      `{"active_state":"failed"}`,
+	}
+	created, isNew, err := store.UpsertObserved(ctx, finding, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !isNew || created.Status != alert.StatusNew || created.Count != 1 {
+		t.Fatalf("created alert = %+v, isNew=%t", created, isNew)
+	}
+	updated, isNew, err := store.UpsertObserved(ctx, finding, now.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if isNew || updated.Status != alert.StatusActive || updated.Count != 2 {
+		t.Fatalf("updated alert = %+v, isNew=%t", updated, isNew)
+	}
+	ack, err := store.AcknowledgeAlert(ctx, updated.ID, "operator", now.Add(2*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ack.Status != alert.StatusAcknowledged || ack.AcknowledgedBy != "operator" {
+		t.Fatalf("acknowledged alert = %+v", ack)
+	}
+	suppressed, err := store.SilenceAlert(ctx, updated.ID, now.Add(time.Hour), now.Add(3*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if suppressed.Status != alert.StatusSuppressed || suppressed.SuppressedUntil == nil {
+		t.Fatalf("suppressed alert = %+v", suppressed)
+	}
+	resolved, err := store.ResolveAlert(ctx, updated.ID, now.Add(4*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.Status != alert.StatusResolved || resolved.ResolvedAt == nil {
+		t.Fatalf("resolved alert = %+v", resolved)
+	}
+	items, err := store.ListAlerts(ctx, alert.ListFilter{Status: alert.StatusResolved}, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].ID != updated.ID {
+		t.Fatalf("ListAlerts() = %+v", items)
+	}
+	pruned, err := store.PruneResolvedAlerts(ctx, now.Add(5*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pruned != 1 {
+		t.Fatalf("PruneResolvedAlerts() = %d, want 1", pruned)
 	}
 }
 

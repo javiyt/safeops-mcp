@@ -1,0 +1,19 @@
+[Unit]
+Description=SafeOps proactive alert monitor
+After=network-online.target safeops-executor.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/safeops/secrets/telegram.env
+ExecStart=/usr/local/bin/safeops-monitor serve --config /etc/safeops/config.yaml
+Restart=on-failure
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/etc/safeops/config.yaml
+ReadWritePaths=/var/lib/safeops
+
+[Install]
+WantedBy=multi-user.target

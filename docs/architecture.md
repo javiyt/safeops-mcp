@@ -1,6 +1,6 @@
 # Architecture
 
-SafeOps MCP has three core binaries and one optional channel adapter.
+SafeOps MCP has four core binaries and one optional channel adapter.
 
 `safeops-mcp` runs without administrative privileges and speaks MCP over stdio. It validates tool inputs, applies policy, creates approvals, records audit events, redacts secrets, and calls the local executor through a Unix socket.
 
@@ -9,6 +9,8 @@ SafeOps MCP has three core binaries and one optional channel adapter.
 `safeopsctl` is an operator CLI for configuration validation, database migrations, audit and approval listing, read-only Podman diagnostics, and read-only host diagnostics.
 
 `safeops-telegram` is an optional channel adapter. It is not a privileged executor and does not expose SafeOps tools directly to Telegram. It accepts private Telegram messages from allowlisted users, calls the configured OpenClaw command, and sends the response back to Telegram.
+
+`safeops-monitor` is an optional proactive alert monitor. It runs as a separate process, calls the existing closed executor API for read-only status and diagnostics, persists alert state in SQLite, applies notification suppression rules, and sends Telegram notifications directly through the Bot API when configured. It does not execute mutable actions.
 
 The trust boundary is the Unix socket. The MCP process never receives a free shell, never calls `sudo`, and never accepts arbitrary commands. The executor never talks to the LLM and never interprets natural language.
 
@@ -64,6 +66,18 @@ Advanced diagnostics flow:
 6. `host_health_summary` evaluates configured thresholds inside SafeOps and returns objective findings with `severity`, `code`, `message`, and optional `resource`. The LLM explains these findings but must not invent unsupported diagnoses.
 
 Diagnostic adapters are intentionally separate packages instead of a generic host-command adapter. This keeps each subsystem's input surface closed and testable.
+
+Proactive alert flow:
+
+1. `safeops-monitor` wakes on `alerts.interval` or an operator runs `safeopsctl alerts check`.
+2. Enabled checks inspect configured service aliases, configured container aliases, executor availability, SQLite alert state, CPU, memory, disk, and repeated configured-resource log errors.
+3. Each abnormal condition maps to a deterministic alert ID derived from resource kind, resource alias, and alert type.
+4. SQLite stores the alert state as `new`, `active`, `acknowledged`, `resolved`, or `suppressed`, with first/last observation timestamps, notification timestamp, count, suppression, acknowledgement, resolution, and JSON metadata.
+5. The monitor applies `persistence_threshold`, `cooldown`, temporary silences, and maintenance windows before notifying.
+6. Eligible alerts are grouped into a single Telegram message. Resolution notifications are sent only when `alerts.notify_resolution` is true and the alert was previously notified.
+7. MCP tools and `safeopsctl alerts` can list, acknowledge, silence, and manually resolve persisted alerts. These operations change alert state only.
+
+The direct Telegram sender is intentionally isolated in `safeops-monitor` for this phase. A future OpenClaw event queue can replace that notifier without changing alert evaluation or persistence.
 
 Action model:
 

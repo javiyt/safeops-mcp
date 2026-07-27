@@ -11,6 +11,7 @@ SafeOps builds these binaries:
 - `safeops-mcp`: an unprivileged MCP server over stdio.
 - `safeops-executor`: a local executor that listens on a restricted Unix socket.
 - `safeopsctl`: an operator CLI for validation, migrations, approvals, and audit listing.
+- `safeops-monitor`: an optional proactive alert monitor that runs scheduled read-only checks and sends Telegram notifications.
 - `safeops-telegram`: an optional private Telegram channel adapter for OpenClaw.
 
 `safeops-mcp` validates tool inputs, applies policy, manages approvals, redacts output, writes audit records, and calls `safeops-executor`. The executor independently validates aliases and executes only predefined operations.
@@ -52,6 +53,8 @@ SafeOps builds these binaries:
 - Unix-socket executor protocol.
 - Configuration validation CLI.
 - Optional private Telegram bot channel with allowlisted users, rate limiting, message splitting, and confirmation buttons.
+- Proactive alerts for services, containers, executor availability, SQLite state, disk, memory, CPU, and repeated application errors.
+- Alert state management with cooldowns, persistence thresholds, temporary silences, resolution notifications, SQLite persistence, MCP tools, and CLI commands.
 
 ## Configuration
 
@@ -165,6 +168,31 @@ telegram:
 
 The Telegram token must come from an environment variable, not from the shared configuration file. See `docs/telegram.md`.
 
+Proactive alerts are optional and disabled by default. Enable `safeops-monitor` only after the executor, database migrations, and Telegram channel are working:
+
+```yaml
+alerts:
+  enabled: true
+  interval: 30s
+  cooldown: 5m
+  persistence_threshold: 30s
+  notify_resolution: true
+  telegram:
+    enabled: true
+    chat_id: 12345678
+  checks:
+    services:
+      enabled: true
+    containers:
+      enabled: true
+    disk:
+      enabled: true
+      warning: 80
+      critical: 90
+```
+
+The monitor only observes and notifies. It does not restart services, restart containers, edit files, or run maintenance automatically.
+
 ## Running
 
 Run the executor on the host:
@@ -183,6 +211,20 @@ Run the Telegram adapter after OpenClaw and the executor are configured:
 
 ```sh
 SAFEOPS_TELEGRAM_TOKEN=replace-with-telegram-bot-token safeops-telegram serve --config /etc/safeops/config.yaml
+```
+
+Run the proactive monitor:
+
+```sh
+SAFEOPS_TELEGRAM_TOKEN=replace-with-telegram-bot-token safeops-monitor serve --config /etc/safeops/config.yaml
+```
+
+Manage alert state:
+
+```sh
+safeopsctl alerts list --status active --config /etc/safeops/config.yaml
+safeopsctl alerts acknowledge alert_service_service-a_service_stopped --config /etc/safeops/config.yaml
+safeopsctl alerts silence alert_service_service-a_service_stopped --duration 1h --config /etc/safeops/config.yaml
 ```
 
 ## OpenClaw

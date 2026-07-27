@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.6.0
+
+- Added `safeops-monitor`, a separate proactive alert monitor that runs scheduled read-only checks and can send direct Telegram notifications.
+- Added SQLite alert persistence with `new`, `active`, `acknowledged`, `resolved`, and `suppressed` states.
+- Added checks for configured services, configured Podman/Quadlet containers, executor availability, SQLite alert state, disk usage, memory pressure/OOM events, CPU load/temperature, and repeated application log errors. Certificate and backup checks are configurable placeholders and remain disabled by default.
+- Added antispam controls for cooldown, grouping, persistence threshold, resolution notifications, temporary silences, and silence schedules.
+- Added MCP alert tools: `list_alerts`, `acknowledge_alert`, and `silence_alert`.
+- Added `safeopsctl alerts list|acknowledge|silence|resolve|check`.
+- Added optional `alerts` configuration and a systemd service example for `safeops-monitor`.
+- Updated architecture, security, operations, OpenClaw, README, and example configuration documentation for proactive alerts.
+
 ## 0.5.0
 
 - Added advanced read-only host diagnostics for CPU, memory, disk health, network, time, configured processes, and aggregate host health summaries.

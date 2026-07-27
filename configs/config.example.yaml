@@ -48,6 +48,64 @@ diagnostics:
   time:
     ntp_check: true
     drift_warning: 1s
+alerts:
+  enabled: false
+  interval: 30s
+  cooldown: 5m
+  persistence_threshold: 30s
+  notify_resolution: true
+  retention: 720h
+  telegram:
+    enabled: false
+    chat_id: 12345678
+  silence_schedule:
+    - start: "02:00"
+      end: "06:00"
+      timezone: "Europe/Madrid"
+  checks:
+    services:
+      enabled: true
+      interval: 30s
+    containers:
+      enabled: true
+      interval: 30s
+    disk:
+      enabled: true
+      interval: 1m
+      warning: 80
+      critical: 90
+    memory:
+      enabled: true
+      interval: 1m
+      pressure_warning: 0.5
+      pressure_critical: 0.8
+    cpu:
+      enabled: true
+      interval: 1m
+      load_warning: 2.0
+      load_critical: 4.0
+      temperature_warning: 70
+      temperature_critical: 80
+    sqlite:
+      enabled: true
+      interval: 1m
+    executor:
+      enabled: true
+      interval: 30s
+    app_errors:
+      enabled: true
+      interval: 1m
+      pattern: "ERROR|FATAL"
+      threshold: 5
+    certificates:
+      enabled: false
+      interval: 1h
+      warning_days: 30
+      critical_days: 7
+    backups:
+      enabled: false
+      interval: 1h
+      max_age: 24h
 telegram:
   enabled: false
   token_env: SAFEOPS_TELEGRAM_TOKEN
@@ -89,8 +147,8 @@ services:
       status: allow
       logs: allow
       restart: confirm
-  database-alpha:
-    unit: database-alpha.service
+  db-service:
+    unit: db-service.service
     permissions:
       status: allow
       logs: allow
@@ -120,7 +178,7 @@ containers:
     health:
       require_healthy_after_restart: false
   container-gamma:
-    container_name: datastore-alpha-container
+    container_name: database-container
     management: podman
     permissions:
       status: allow

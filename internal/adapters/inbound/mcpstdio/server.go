@@ -114,6 +114,24 @@ func (s Server) callTool(ctx context.Context, name string, args json.RawMessage)
 		return s.Tools.ConfiguredProcessStatus(ctx, s.UserID)
 	case "host_health_summary":
 		return s.Tools.HostHealthSummary(ctx, s.UserID)
+	case "list_alerts":
+		var in tools.ListAlertsInput
+		if err := json.Unmarshal(args, &in); err != nil {
+			return nil, err
+		}
+		return s.Tools.ListAlerts(ctx, s.UserID, in)
+	case "acknowledge_alert":
+		var in tools.AcknowledgeAlertInput
+		if err := json.Unmarshal(args, &in); err != nil {
+			return nil, err
+		}
+		return s.Tools.AcknowledgeAlert(ctx, s.UserID, in)
+	case "silence_alert":
+		var in tools.SilenceAlertInput
+		if err := json.Unmarshal(args, &in); err != nil {
+			return nil, err
+		}
+		return s.Tools.SilenceAlert(ctx, s.UserID, in)
 	case "disk_status":
 		var in struct {
 			PathAlias string `json:"path_alias"`
@@ -219,6 +237,9 @@ func toolDefinitions(podmanEnabled bool) []map[string]any {
 		tool("time_status", "Read-only SafeOps diagnostic tool. Returns current time, timezone, and configured NTP synchronization status when available.", emptySchema()),
 		tool("configured_process_status", "Read-only SafeOps diagnostic tool. Returns only processes associated with configured service or container aliases. Command lines are redacted and untrusted host data.", emptySchema()),
 		tool("host_health_summary", "Read-only SafeOps diagnostic tool. Returns SafeOps-generated objective findings with severity, code, message, and resource. The agent should explain these findings without inventing unsupported diagnoses.", emptySchema()),
+		tool("list_alerts", "Read-only SafeOps alert tool. Lists persisted alerts with optional status and severity filters; it does not run checks or execute remediation.", map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"status": map[string]any{"type": "string", "enum": []string{"new", "active", "acknowledged", "resolved", "suppressed"}}, "severity": map[string]any{"type": "string", "enum": []string{"info", "warning", "critical"}}, "limit": map[string]string{"type": "integer"}}}),
+		tool("acknowledge_alert", "Read-only SafeOps alert management tool. Marks an existing alert as acknowledged for the configured SafeOps user and performs no remediation.", map[string]any{"type": "object", "required": []string{"alert_id"}, "additionalProperties": false, "properties": map[string]any{"alert_id": map[string]string{"type": "string"}}}),
+		tool("silence_alert", "Read-only SafeOps alert management tool. Temporarily suppresses notifications for an existing alert and performs no remediation.", map[string]any{"type": "object", "required": []string{"alert_id", "duration"}, "additionalProperties": false, "properties": map[string]any{"alert_id": map[string]string{"type": "string"}, "duration": map[string]string{"type": "string"}}}),
 		tool("disk_status", "Read-only SafeOps tool. Returns status for a configured disk path alias only; do not invent aliases or submit arbitrary paths.", map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"path_alias": map[string]string{"type": "string"}, "path": map[string]string{"type": "string"}}}),
 		tool("list_services", "Read-only SafeOps tool. Lists configured service aliases only and does not enumerate arbitrary host systemd units.", map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{}}),
 		tool("service_status", "Read-only SafeOps tool. Returns status for a configured service alias only; do not invent aliases or submit raw unit names.", map[string]any{"type": "object", "required": []string{"service"}, "additionalProperties": false, "properties": map[string]any{"service": map[string]string{"type": "string"}}}),

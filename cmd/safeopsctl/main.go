@@ -10,7 +10,9 @@ import (
 	"os/user"
 	"sort"
 	"strings"
+	"time"
 
+	"github.com/javiyt/safeops-mcp/internal/adapters/outbound/executorclient"
 	"github.com/javiyt/safeops-mcp/internal/adapters/outbound/linux/configuredprocess"
 	cpuadapter "github.com/javiyt/safeops-mcp/internal/adapters/outbound/linux/cpu"
 	"github.com/javiyt/safeops-mcp/internal/adapters/outbound/linux/diskhealth"
@@ -20,8 +22,10 @@ import (
 	"github.com/javiyt/safeops-mcp/internal/adapters/outbound/linux/process"
 	"github.com/javiyt/safeops-mcp/internal/adapters/outbound/linux/timestatus"
 	sqlitestore "github.com/javiyt/safeops-mcp/internal/adapters/outbound/sqlite"
+	"github.com/javiyt/safeops-mcp/internal/application/alerts"
 	"github.com/javiyt/safeops-mcp/internal/bootstrap"
 	"github.com/javiyt/safeops-mcp/internal/config"
+	"github.com/javiyt/safeops-mcp/internal/domain/alert"
 	"github.com/javiyt/safeops-mcp/internal/ports"
 	"github.com/javiyt/safeops-mcp/internal/redaction"
 )
@@ -42,7 +46,7 @@ func main() {
 
 func run(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: safeopsctl <validate-config|migrate|approvals|audit|podman|containers|diagnostics> [args]")
+		return fmt.Errorf("usage: safeopsctl <validate-config|migrate|approvals|audit|alerts|podman|containers|diagnostics> [args]")
 	}
 	switch args[0] {
 	case "validate-config":
@@ -70,6 +74,8 @@ func run(ctx context.Context, args []string) error {
 		return approvals(ctx, args[1:])
 	case "audit":
 		return audit(ctx, args[1:])
+	case "alerts":
+		return alertCommand(ctx, args[1:])
 	case "podman":
 		return podman(ctx, args[1:])
 	case "containers":
@@ -78,6 +84,131 @@ func run(ctx context.Context, args []string) error {
 		return diagnostics(ctx, args[1:])
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
+	}
+}
+
+func alertCommand(ctx context.Context, args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: safeopsctl alerts <list|acknowledge|silence|resolve|check> [args]")
+	}
+	switch args[0] {
+	case "list":
+		fs := flag.NewFlagSet("alerts list", flag.ContinueOnError)
+		status := fs.String("status", "", "Filter by alert status.")
+		severity := fs.String("severity", "", "Filter by severity.")
+		limit := fs.Int("limit", 50, "Maximum number of alerts to print.")
+		cfgPath := fs.String("config", "/etc/safeops/config.yaml", "Path to the SafeOps configuration file.")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		store, closeFn, err := openAlertStore(ctx, *cfgPath)
+		if err != nil {
+			return err
+		}
+		defer func() {
+			_ = closeFn()
+		}()
+		items, err := store.ListAlerts(ctx, alert.ListFilter{Status: alert.Status(*status), Severity: alert.Severity(*severity)}, *limit)
+		if err != nil {
+			return err
+		}
+		for _, item := range items {
+			fmt.Printf("%s\t%s\t%s\t%s\t%s\t%d\n", item.ID, item.Status, item.Severity, item.ResourceKind, item.ResourceAlias, item.Count)
+		}
+		return nil
+	case "acknowledge":
+		if len(args) < 2 {
+			return fmt.Errorf("usage: safeopsctl alerts acknowledge <alert-id> --config /etc/safeops/config.yaml")
+		}
+		cfg, store, closeFn, err := loadAlertCommand(ctx, "alerts acknowledge", args[2:])
+		if err != nil {
+			return err
+		}
+		defer func() {
+			_ = closeFn()
+		}()
+		a, err := store.AcknowledgeAlert(ctx, args[1], cfg.Identity.AdministratorID, time.Now().UTC())
+		if err != nil {
+			return err
+		}
+		fmt.Printf("%s\t%s\n", a.ID, a.Status)
+		return nil
+	case "silence":
+		if len(args) < 2 {
+			return fmt.Errorf("usage: safeopsctl alerts silence <alert-id> --duration 1h --config /etc/safeops/config.yaml")
+		}
+		fs := flag.NewFlagSet("alerts silence", flag.ContinueOnError)
+		duration := fs.String("duration", "", "Silence duration.")
+		cfgPath := fs.String("config", "/etc/safeops/config.yaml", "Path to the SafeOps configuration file.")
+		if err := fs.Parse(args[2:]); err != nil {
+			return err
+		}
+		if *duration == "" {
+			return fmt.Errorf("--duration is required")
+		}
+		d, err := time.ParseDuration(*duration)
+		if err != nil || d <= 0 {
+			return fmt.Errorf("--duration must be a positive Go duration such as 1h")
+		}
+		store, closeFn, err := openAlertStore(ctx, *cfgPath)
+		if err != nil {
+			return err
+		}
+		defer func() {
+			_ = closeFn()
+		}()
+		now := time.Now().UTC()
+		a, err := store.SilenceAlert(ctx, args[1], now.Add(d), now)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("%s\t%s\t%s\n", a.ID, a.Status, now.Add(d).Format(time.RFC3339))
+		return nil
+	case "resolve":
+		if len(args) < 2 {
+			return fmt.Errorf("usage: safeopsctl alerts resolve <alert-id> --config /etc/safeops/config.yaml")
+		}
+		_, store, closeFn, err := loadAlertCommand(ctx, "alerts resolve", args[2:])
+		if err != nil {
+			return err
+		}
+		defer func() {
+			_ = closeFn()
+		}()
+		a, err := store.ResolveAlert(ctx, args[1], time.Now().UTC())
+		if err != nil {
+			return err
+		}
+		fmt.Printf("%s\t%s\n", a.ID, a.Status)
+		return nil
+	case "check":
+		cfg, err := loadConfigFlag("alerts check", args[1:])
+		if err != nil {
+			return err
+		}
+		if !cfg.Alerts.Enabled {
+			return fmt.Errorf("alerts are disabled")
+		}
+		store, err := sqlitestore.Open(cfg.Database.Path)
+		if err != nil {
+			return err
+		}
+		defer func() {
+			_ = store.Close()
+		}()
+		if err := store.Migrate(ctx); err != nil {
+			return err
+		}
+		svc := alerts.Service{
+			Config:   cfg,
+			Executor: executorClient(cfg),
+			Alerts:   store,
+			Audit:    store,
+			Clock:    bootstrap.SystemClock{},
+		}
+		return svc.RunOnce(ctx)
+	default:
+		return fmt.Errorf("unknown alerts command %q", args[0])
 	}
 }
 
@@ -366,6 +497,42 @@ func audit(ctx context.Context, args []string) error {
 		fmt.Printf("%s\t%s\t%s\t%s\t%s\n", item.Timestamp.Format("2006-01-02T15:04:05Z07:00"), item.UserID, item.EventType, item.Action, item.Status)
 	}
 	return nil
+}
+
+func openAlertStore(ctx context.Context, cfgPath string) (*sqlitestore.Store, func() error, error) {
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	store, err := sqlitestore.Open(cfg.Database.Path)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := store.Migrate(ctx); err != nil {
+		_ = store.Close()
+		return nil, nil, err
+	}
+	return store, store.Close, nil
+}
+
+func loadAlertCommand(ctx context.Context, name string, args []string) (config.Config, *sqlitestore.Store, func() error, error) {
+	cfg, err := loadConfigFlag(name, args)
+	if err != nil {
+		return config.Config{}, nil, nil, err
+	}
+	store, err := sqlitestore.Open(cfg.Database.Path)
+	if err != nil {
+		return config.Config{}, nil, nil, err
+	}
+	if err := store.Migrate(ctx); err != nil {
+		_ = store.Close()
+		return config.Config{}, nil, nil, err
+	}
+	return cfg, store, store.Close, nil
+}
+
+func executorClient(cfg config.Config) executorclient.Client {
+	return executorclient.New(cfg.Socket.Path)
 }
 
 func loadConfigFlag(name string, args []string) (config.Config, error) {

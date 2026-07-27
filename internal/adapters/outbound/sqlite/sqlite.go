@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/javiyt/safeops-mcp/internal/domain/alert"
 	"github.com/javiyt/safeops-mcp/internal/domain/approval"
 	"github.com/javiyt/safeops-mcp/internal/domain/audit"
 	"github.com/javiyt/safeops-mcp/migrations"
@@ -242,7 +243,196 @@ FROM audit_events ORDER BY timestamp DESC LIMIT ?`, limit)
 	return out, rows.Err()
 }
 
+func (s *Store) UpsertObserved(ctx context.Context, finding alert.Finding, now time.Time) (alert.Alert, bool, error) {
+	id := alertID(finding)
+	stored, err := s.GetAlert(ctx, id)
+	if err == nil {
+		status := stored.Status
+		if status != alert.StatusAcknowledged && status != alert.StatusSuppressed {
+			status = alert.StatusActive
+		}
+		_, err = s.db.ExecContext(ctx, `UPDATE alerts SET severity = ?, status = ?, message = ?, last_observed = ?, count = count + 1, metadata = ?, updated_at = ? WHERE id = ?`,
+			finding.Severity, status, finding.Message, formatTime(now), finding.Metadata, formatTime(now), id)
+		if err != nil {
+			return alert.Alert{}, false, err
+		}
+		updated, err := s.GetAlert(ctx, id)
+		return updated, false, err
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return alert.Alert{}, false, err
+	}
+	a := alert.Alert{
+		ID:            id,
+		ResourceKind:  finding.ResourceKind,
+		ResourceAlias: finding.ResourceAlias,
+		Type:          finding.Type,
+		Severity:      finding.Severity,
+		Status:        alert.StatusNew,
+		Message:       finding.Message,
+		FirstObserved: now.UTC(),
+		LastObserved:  now.UTC(),
+		Count:         1,
+		Metadata:      finding.Metadata,
+		CreatedAt:     now.UTC(),
+		UpdatedAt:     now.UTC(),
+	}
+	_, err = s.db.ExecContext(ctx, `INSERT INTO alerts
+(id, resource_kind, resource_alias, alert_type, severity, status, message, first_observed, last_observed, count, metadata, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		a.ID, a.ResourceKind, a.ResourceAlias, a.Type, a.Severity, a.Status, a.Message, formatTime(a.FirstObserved), formatTime(a.LastObserved),
+		a.Count, a.Metadata, formatTime(a.CreatedAt), formatTime(a.UpdatedAt))
+	return a, true, err
+}
+
+func (s *Store) ResolveMissing(ctx context.Context, observedIDs map[string]bool, now time.Time) ([]alert.Alert, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id FROM alerts WHERE status IN ('new', 'active', 'acknowledged', 'suppressed')`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		_ = rows.Close()
+	}()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		if observedIDs[id] {
+			continue
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	var resolved []alert.Alert
+	for _, id := range ids {
+		a, err := s.ResolveAlert(ctx, id, now)
+		if err != nil {
+			return nil, err
+		}
+		resolved = append(resolved, a)
+	}
+	return resolved, nil
+}
+
+func (s *Store) ListAlerts(ctx context.Context, filter alert.ListFilter, limit int) ([]alert.Alert, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	query := `SELECT id, resource_kind, resource_alias, alert_type, severity, status, message, first_observed, last_observed, last_notified, count,
+acknowledged_by, acknowledged_at, suppressed_until, resolved_at, metadata, created_at, updated_at FROM alerts`
+	var args []any
+	var where []string
+	if filter.Status != "" {
+		where = append(where, "status = ?")
+		args = append(args, filter.Status)
+	}
+	if filter.Severity != "" {
+		where = append(where, "severity = ?")
+		args = append(args, filter.Severity)
+	}
+	if len(where) > 0 {
+		query += " WHERE " + joinWhere(where)
+	}
+	query += " ORDER BY updated_at DESC LIMIT ?"
+	args = append(args, limit)
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		_ = rows.Close()
+	}()
+	var out []alert.Alert
+	for rows.Next() {
+		a, err := scanAlert(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) GetAlert(ctx context.Context, id string) (alert.Alert, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT id, resource_kind, resource_alias, alert_type, severity, status, message, first_observed, last_observed, last_notified, count,
+acknowledged_by, acknowledged_at, suppressed_until, resolved_at, metadata, created_at, updated_at FROM alerts WHERE id = ?`, id)
+	return scanAlert(row)
+}
+
+func (s *Store) CheckAlertStorage(ctx context.Context, now time.Time) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+	id := "alert_probe_sqlite_writable"
+	if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO alerts
+(id, resource_kind, resource_alias, alert_type, severity, status, message, first_observed, last_observed, count, metadata, created_at, updated_at)
+VALUES (?, 'system', 'sqlite', 'sqlite_writable_probe', 'info', 'resolved', 'SQLite write probe.', ?, ?, 1, '{}', ?, ?)`,
+		id, formatTime(now), formatTime(now), formatTime(now), formatTime(now)); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM alerts WHERE id = ?`, id); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *Store) MarkAlertNotified(ctx context.Context, id string, now time.Time) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE alerts SET last_notified = ?, status = CASE WHEN status = 'new' THEN 'active' ELSE status END, updated_at = ? WHERE id = ?`,
+		formatTime(now), formatTime(now), id)
+	return err
+}
+
+func (s *Store) AcknowledgeAlert(ctx context.Context, id, userID string, now time.Time) (alert.Alert, error) {
+	_, err := s.db.ExecContext(ctx, `UPDATE alerts SET status = ?, acknowledged_by = ?, acknowledged_at = ?, updated_at = ? WHERE id = ? AND status IN ('new', 'active')`,
+		alert.StatusAcknowledged, userID, formatTime(now), formatTime(now), id)
+	if err != nil {
+		return alert.Alert{}, err
+	}
+	return s.GetAlert(ctx, id)
+}
+
+func (s *Store) SilenceAlert(ctx context.Context, id string, until time.Time, now time.Time) (alert.Alert, error) {
+	_, err := s.db.ExecContext(ctx, `UPDATE alerts SET status = ?, suppressed_until = ?, updated_at = ? WHERE id = ? AND status IN ('new', 'active', 'acknowledged', 'suppressed')`,
+		alert.StatusSuppressed, formatTime(until), formatTime(now), id)
+	if err != nil {
+		return alert.Alert{}, err
+	}
+	return s.GetAlert(ctx, id)
+}
+
+func (s *Store) ResolveAlert(ctx context.Context, id string, now time.Time) (alert.Alert, error) {
+	_, err := s.db.ExecContext(ctx, `UPDATE alerts SET status = ?, resolved_at = ?, updated_at = ? WHERE id = ?`,
+		alert.StatusResolved, formatTime(now), formatTime(now), id)
+	if err != nil {
+		return alert.Alert{}, err
+	}
+	return s.GetAlert(ctx, id)
+}
+
+func (s *Store) PruneResolvedAlerts(ctx context.Context, before time.Time) (int64, error) {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM alerts WHERE status = ? AND updated_at < ?`, alert.StatusResolved, formatTime(before))
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
 type approvalScanner interface {
+	Scan(dest ...any) error
+}
+
+type alertScanner interface {
 	Scan(dest ...any) error
 }
 
@@ -273,4 +463,87 @@ func scanApproval(row approvalScanner) (approval.Approval, error) {
 		a.ExecutedAt = &utc
 	}
 	return a, nil
+}
+
+func scanAlert(row alertScanner) (alert.Alert, error) {
+	var a alert.Alert
+	var firstObserved, lastObserved, createdAt, updatedAt string
+	var lastNotified, acknowledgedAt, suppressedUntil, resolvedAt sql.NullString
+	if err := row.Scan(&a.ID, &a.ResourceKind, &a.ResourceAlias, &a.Type, &a.Severity, &a.Status, &a.Message, &firstObserved, &lastObserved, &lastNotified,
+		&a.Count, &a.AcknowledgedBy, &acknowledgedAt, &suppressedUntil, &resolvedAt, &a.Metadata, &createdAt, &updatedAt); err != nil {
+		return alert.Alert{}, err
+	}
+	var err error
+	if a.FirstObserved, err = parseTime(firstObserved); err != nil {
+		return alert.Alert{}, err
+	}
+	if a.LastObserved, err = parseTime(lastObserved); err != nil {
+		return alert.Alert{}, err
+	}
+	if a.CreatedAt, err = parseTime(createdAt); err != nil {
+		return alert.Alert{}, err
+	}
+	if a.UpdatedAt, err = parseTime(updatedAt); err != nil {
+		return alert.Alert{}, err
+	}
+	if lastNotified.Valid {
+		parsed, err := parseTime(lastNotified.String)
+		if err != nil {
+			return alert.Alert{}, err
+		}
+		a.LastNotified = &parsed
+	}
+	if acknowledgedAt.Valid {
+		parsed, err := parseTime(acknowledgedAt.String)
+		if err != nil {
+			return alert.Alert{}, err
+		}
+		a.AcknowledgedAt = &parsed
+	}
+	if suppressedUntil.Valid {
+		parsed, err := parseTime(suppressedUntil.String)
+		if err != nil {
+			return alert.Alert{}, err
+		}
+		a.SuppressedUntil = &parsed
+	}
+	if resolvedAt.Valid {
+		parsed, err := parseTime(resolvedAt.String)
+		if err != nil {
+			return alert.Alert{}, err
+		}
+		a.ResolvedAt = &parsed
+	}
+	return a, nil
+}
+
+func alertID(f alert.Finding) string {
+	return fmt.Sprintf("alert_%s_%s_%s", f.ResourceKind, f.ResourceAlias, f.Type)
+}
+
+func formatTime(t time.Time) string {
+	return t.UTC().Format(time.RFC3339Nano)
+}
+
+func parseTime(s string) (time.Time, error) {
+	t, err := time.Parse(time.RFC3339Nano, s)
+	if err == nil {
+		return t.UTC(), nil
+	}
+	t, err = time.Parse("2006-01-02 15:04:05", s)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return t.UTC(), nil
+}
+
+func joinWhere(parts []string) string {
+	out := ""
+	for i, part := range parts {
+		if i > 0 {
+			out += " AND "
+		}
+		out += part
+	}
+	return out
 }

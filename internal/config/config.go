@@ -23,6 +23,7 @@ type Config struct {
 	Limits      LimitsConfig               `yaml:"limits"`
 	Filesystem  FilesystemConfig           `yaml:"filesystem"`
 	Diagnostics DiagnosticsConfig          `yaml:"diagnostics"`
+	Alerts      AlertsConfig               `yaml:"alerts"`
 	Telegram    TelegramConfig             `yaml:"telegram"`
 	Services    map[string]ServiceConfig   `yaml:"services"`
 	Podman      PodmanConfig               `yaml:"podman"`
@@ -104,6 +105,90 @@ type DiagnosticsNetworkConfig struct {
 type DiagnosticsTimeConfig struct {
 	NTPCheck     bool     `yaml:"ntp_check"`
 	DriftWarning Duration `yaml:"drift_warning"`
+}
+
+type AlertsConfig struct {
+	Enabled              bool                    `yaml:"enabled"`
+	Interval             Duration                `yaml:"interval"`
+	Cooldown             Duration                `yaml:"cooldown"`
+	PersistenceThreshold Duration                `yaml:"persistence_threshold"`
+	NotifyResolution     bool                    `yaml:"notify_resolution"`
+	Retention            Duration                `yaml:"retention"`
+	Telegram             AlertsTelegramConfig    `yaml:"telegram"`
+	SilenceSchedule      []SilenceScheduleConfig `yaml:"silence_schedule"`
+	Checks               AlertChecksConfig       `yaml:"checks"`
+}
+
+type AlertsTelegramConfig struct {
+	Enabled bool  `yaml:"enabled"`
+	ChatID  int64 `yaml:"chat_id"`
+}
+
+type SilenceScheduleConfig struct {
+	Start    string `yaml:"start"`
+	End      string `yaml:"end"`
+	Timezone string `yaml:"timezone"`
+}
+
+type AlertChecksConfig struct {
+	Services     AlertCheckConfig             `yaml:"services"`
+	Containers   AlertCheckConfig             `yaml:"containers"`
+	Disk         AlertThresholdCheckConfig    `yaml:"disk"`
+	Memory       AlertMemoryCheckConfig       `yaml:"memory"`
+	CPU          AlertCPUCheckConfig          `yaml:"cpu"`
+	SQLite       AlertCheckConfig             `yaml:"sqlite"`
+	Executor     AlertCheckConfig             `yaml:"executor"`
+	AppErrors    AlertAppErrorsCheckConfig    `yaml:"app_errors"`
+	Certificates AlertCertificatesCheckConfig `yaml:"certificates"`
+	Backups      AlertBackupsCheckConfig      `yaml:"backups"`
+}
+
+type AlertCheckConfig struct {
+	Enabled  bool     `yaml:"enabled"`
+	Interval Duration `yaml:"interval"`
+}
+
+type AlertThresholdCheckConfig struct {
+	Enabled  bool     `yaml:"enabled"`
+	Interval Duration `yaml:"interval"`
+	Warning  float64  `yaml:"warning"`
+	Critical float64  `yaml:"critical"`
+}
+
+type AlertMemoryCheckConfig struct {
+	Enabled          bool     `yaml:"enabled"`
+	Interval         Duration `yaml:"interval"`
+	PressureWarning  float64  `yaml:"pressure_warning"`
+	PressureCritical float64  `yaml:"pressure_critical"`
+}
+
+type AlertCPUCheckConfig struct {
+	Enabled             bool     `yaml:"enabled"`
+	Interval            Duration `yaml:"interval"`
+	LoadWarning         float64  `yaml:"load_warning"`
+	LoadCritical        float64  `yaml:"load_critical"`
+	TemperatureWarning  float64  `yaml:"temperature_warning"`
+	TemperatureCritical float64  `yaml:"temperature_critical"`
+}
+
+type AlertAppErrorsCheckConfig struct {
+	Enabled   bool     `yaml:"enabled"`
+	Interval  Duration `yaml:"interval"`
+	Pattern   string   `yaml:"pattern"`
+	Threshold int      `yaml:"threshold"`
+}
+
+type AlertCertificatesCheckConfig struct {
+	Enabled      bool     `yaml:"enabled"`
+	Interval     Duration `yaml:"interval"`
+	WarningDays  int      `yaml:"warning_days"`
+	CriticalDays int      `yaml:"critical_days"`
+}
+
+type AlertBackupsCheckConfig struct {
+	Enabled  bool     `yaml:"enabled"`
+	Interval Duration `yaml:"interval"`
+	MaxAge   Duration `yaml:"max_age"`
 }
 
 type DiskPathConfig struct {
@@ -264,6 +349,89 @@ func (cfg *Config) ApplyDefaults() {
 	if cfg.Diagnostics.Time.DriftWarning.Std() == 0 {
 		cfg.Diagnostics.Time.DriftWarning = Duration(time.Second)
 	}
+	cfg.applyAlertDefaults()
+}
+
+func (cfg *Config) applyAlertDefaults() {
+	if cfg.Alerts.Interval.Std() == 0 {
+		cfg.Alerts.Interval = Duration(30 * time.Second)
+	}
+	if cfg.Alerts.Cooldown.Std() == 0 {
+		cfg.Alerts.Cooldown = Duration(5 * time.Minute)
+	}
+	if cfg.Alerts.PersistenceThreshold.Std() == 0 {
+		cfg.Alerts.PersistenceThreshold = Duration(30 * time.Second)
+	}
+	if cfg.Alerts.Retention.Std() == 0 {
+		cfg.Alerts.Retention = Duration(30 * 24 * time.Hour)
+	}
+	defaultAlertCheck(&cfg.Alerts.Checks.Services, cfg.Alerts.Interval.Std())
+	defaultAlertCheck(&cfg.Alerts.Checks.Containers, cfg.Alerts.Interval.Std())
+	defaultAlertCheck(&cfg.Alerts.Checks.SQLite, time.Minute)
+	defaultAlertCheck(&cfg.Alerts.Checks.Executor, cfg.Alerts.Interval.Std())
+	if cfg.Alerts.Checks.Disk.Interval.Std() == 0 {
+		cfg.Alerts.Checks.Disk.Interval = Duration(time.Minute)
+	}
+	if cfg.Alerts.Checks.Disk.Warning == 0 {
+		cfg.Alerts.Checks.Disk.Warning = cfg.Diagnostics.Disk.UsageWarning
+	}
+	if cfg.Alerts.Checks.Disk.Critical == 0 {
+		cfg.Alerts.Checks.Disk.Critical = cfg.Diagnostics.Disk.UsageCritical
+	}
+	if cfg.Alerts.Checks.Memory.Interval.Std() == 0 {
+		cfg.Alerts.Checks.Memory.Interval = Duration(time.Minute)
+	}
+	if cfg.Alerts.Checks.Memory.PressureWarning == 0 {
+		cfg.Alerts.Checks.Memory.PressureWarning = 0.5
+	}
+	if cfg.Alerts.Checks.Memory.PressureCritical == 0 {
+		cfg.Alerts.Checks.Memory.PressureCritical = 0.8
+	}
+	if cfg.Alerts.Checks.CPU.Interval.Std() == 0 {
+		cfg.Alerts.Checks.CPU.Interval = Duration(time.Minute)
+	}
+	if cfg.Alerts.Checks.CPU.LoadWarning == 0 {
+		cfg.Alerts.Checks.CPU.LoadWarning = cfg.Diagnostics.CPU.LoadWarning
+	}
+	if cfg.Alerts.Checks.CPU.LoadCritical == 0 {
+		cfg.Alerts.Checks.CPU.LoadCritical = cfg.Diagnostics.CPU.LoadCritical
+	}
+	if cfg.Alerts.Checks.CPU.TemperatureWarning == 0 {
+		cfg.Alerts.Checks.CPU.TemperatureWarning = cfg.Diagnostics.CPU.TemperatureWarning
+	}
+	if cfg.Alerts.Checks.CPU.TemperatureCritical == 0 {
+		cfg.Alerts.Checks.CPU.TemperatureCritical = cfg.Diagnostics.CPU.TemperatureCritical
+	}
+	if cfg.Alerts.Checks.AppErrors.Interval.Std() == 0 {
+		cfg.Alerts.Checks.AppErrors.Interval = Duration(time.Minute)
+	}
+	if cfg.Alerts.Checks.AppErrors.Pattern == "" {
+		cfg.Alerts.Checks.AppErrors.Pattern = "ERROR|FATAL"
+	}
+	if cfg.Alerts.Checks.AppErrors.Threshold == 0 {
+		cfg.Alerts.Checks.AppErrors.Threshold = 5
+	}
+	if cfg.Alerts.Checks.Certificates.Interval.Std() == 0 {
+		cfg.Alerts.Checks.Certificates.Interval = Duration(time.Hour)
+	}
+	if cfg.Alerts.Checks.Certificates.WarningDays == 0 {
+		cfg.Alerts.Checks.Certificates.WarningDays = 30
+	}
+	if cfg.Alerts.Checks.Certificates.CriticalDays == 0 {
+		cfg.Alerts.Checks.Certificates.CriticalDays = 7
+	}
+	if cfg.Alerts.Checks.Backups.Interval.Std() == 0 {
+		cfg.Alerts.Checks.Backups.Interval = Duration(time.Hour)
+	}
+	if cfg.Alerts.Checks.Backups.MaxAge.Std() == 0 {
+		cfg.Alerts.Checks.Backups.MaxAge = Duration(24 * time.Hour)
+	}
+}
+
+func defaultAlertCheck(check *AlertCheckConfig, interval time.Duration) {
+	if check.Interval.Std() == 0 {
+		check.Interval = Duration(interval)
+	}
 }
 
 func Validate(cfg Config) error {
@@ -317,6 +485,7 @@ func Validate(cfg Config) error {
 		}
 	}
 	validateDiagnostics(&errs, cfg)
+	validateAlerts(&errs, cfg)
 	for alias := range cfg.Services {
 		if _, ok := cfg.Containers[alias]; ok {
 			errs = append(errs, fmt.Errorf("alias %q is ambiguous between services and containers", alias))
@@ -339,6 +508,64 @@ func Validate(cfg Config) error {
 	validateTelegram(&errs, cfg)
 	validatePodman(&errs, cfg)
 	return errors.Join(errs...)
+}
+
+func validateAlerts(errs *[]error, cfg Config) {
+	if !cfg.Alerts.Enabled {
+		return
+	}
+	if cfg.Alerts.Interval.Std() <= 0 {
+		*errs = append(*errs, errors.New("alerts.interval must be positive"))
+	}
+	if cfg.Alerts.Cooldown.Std() < 0 {
+		*errs = append(*errs, errors.New("alerts.cooldown must not be negative"))
+	}
+	if cfg.Alerts.PersistenceThreshold.Std() < 0 {
+		*errs = append(*errs, errors.New("alerts.persistence_threshold must not be negative"))
+	}
+	if cfg.Alerts.Retention.Std() <= 0 {
+		*errs = append(*errs, errors.New("alerts.retention must be positive"))
+	}
+	validateAlertCheckInterval(errs, "alerts.checks.services.interval", cfg.Alerts.Checks.Services.Interval)
+	validateAlertCheckInterval(errs, "alerts.checks.containers.interval", cfg.Alerts.Checks.Containers.Interval)
+	validateAlertCheckInterval(errs, "alerts.checks.disk.interval", cfg.Alerts.Checks.Disk.Interval)
+	validateAlertCheckInterval(errs, "alerts.checks.memory.interval", cfg.Alerts.Checks.Memory.Interval)
+	validateAlertCheckInterval(errs, "alerts.checks.cpu.interval", cfg.Alerts.Checks.CPU.Interval)
+	validateAlertCheckInterval(errs, "alerts.checks.sqlite.interval", cfg.Alerts.Checks.SQLite.Interval)
+	validateAlertCheckInterval(errs, "alerts.checks.executor.interval", cfg.Alerts.Checks.Executor.Interval)
+	validateIncreasingThreshold(errs, "alerts.checks.disk", cfg.Alerts.Checks.Disk.Warning, cfg.Alerts.Checks.Disk.Critical)
+	validateIncreasingThreshold(errs, "alerts.checks.memory.pressure", cfg.Alerts.Checks.Memory.PressureWarning, cfg.Alerts.Checks.Memory.PressureCritical)
+	validateIncreasingThreshold(errs, "alerts.checks.cpu.load", cfg.Alerts.Checks.CPU.LoadWarning, cfg.Alerts.Checks.CPU.LoadCritical)
+	validateIncreasingThreshold(errs, "alerts.checks.cpu.temperature", cfg.Alerts.Checks.CPU.TemperatureWarning, cfg.Alerts.Checks.CPU.TemperatureCritical)
+	if cfg.Alerts.Telegram.Enabled {
+		if !cfg.Telegram.Enabled {
+			*errs = append(*errs, errors.New("telegram.enabled must be true when alerts.telegram.enabled is true"))
+		}
+		if cfg.Alerts.Telegram.ChatID == 0 {
+			*errs = append(*errs, errors.New("alerts.telegram.chat_id is required when alerts.telegram.enabled is true"))
+		}
+	}
+	for _, window := range cfg.Alerts.SilenceSchedule {
+		if !validClockHHMM(window.Start) || !validClockHHMM(window.End) {
+			*errs = append(*errs, errors.New("alerts.silence_schedule start and end must use HH:MM"))
+		}
+		if window.Timezone != "" {
+			if _, err := time.LoadLocation(window.Timezone); err != nil {
+				*errs = append(*errs, fmt.Errorf("alerts.silence_schedule timezone %q is invalid", window.Timezone))
+			}
+		}
+	}
+}
+
+func validateAlertCheckInterval(errs *[]error, name string, d Duration) {
+	if d.Std() <= 0 {
+		*errs = append(*errs, fmt.Errorf("%s must be positive", name))
+	}
+}
+
+func validClockHHMM(value string) bool {
+	_, err := time.Parse("15:04", value)
+	return err == nil
 }
 
 func validateDiagnostics(errs *[]error, cfg Config) {
