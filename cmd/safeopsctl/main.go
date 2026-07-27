@@ -90,39 +90,64 @@ func podman(ctx context.Context, args []string) error {
 		return err
 	}
 	current, _ := currentUser()
-	outputf("binary\t%s\n", cfg.Podman.Binary)
-	outputf("mode\t%s\n", cfg.Podman.Mode)
-	outputf("systemd_scope\t%s\n", cfg.Podman.SystemdScope)
+	if err := podmanCheckPrintf("binary\t%s\n", cfg.Podman.Binary); err != nil {
+		return err
+	}
+	if err := podmanCheckPrintf("mode\t%s\n", cfg.Podman.Mode); err != nil {
+		return err
+	}
+	if err := podmanCheckPrintf("systemd_scope\t%s\n", cfg.Podman.SystemdScope); err != nil {
+		return err
+	}
 	if current != nil {
-		outputf("user\t%s\n", current.Username)
+		if err := podmanCheckPrintf("user\t%s\n", current.Username); err != nil {
+			return err
+		}
 	}
 	if cfg.Podman.SystemdScope == "user" {
 		xdgSet := os.Getenv("XDG_RUNTIME_DIR") != ""
-		outputf("xdg_runtime_dir_set\t%t\n", xdgSet)
+		if err := podmanCheckPrintf("xdg_runtime_dir_set\t%t\n", xdgSet); err != nil {
+			return err
+		}
 		if !xdgSet {
 			return fmt.Errorf("XDG_RUNTIME_DIR is required for user-scoped Quadlets")
 		}
 		if _, err := runner.Run(ctx, systemctlPath, "--user", "show-environment"); err != nil {
 			return fmt.Errorf("systemctl --user access: %w", err)
 		}
-		outputf("systemctl_user_access\tok\n")
+		if err := podmanCheckPrintf("systemctl_user_access\tok\n"); err != nil {
+			return err
+		}
 		if loginctl, err := lookPath("loginctl"); err == nil && current != nil {
 			if out, err := runner.Run(ctx, loginctl, "show-user", current.Username, "--property=Linger", "--value"); err == nil {
-				outputf("linger\t%s\n", strings.TrimSpace(out.Stdout))
+				if err := podmanCheckPrintf("linger\t%s\n", strings.TrimSpace(out.Stdout)); err != nil {
+					return err
+				}
 			}
 		}
 	}
-	outputf("version_json_bytes\t%d\n", len(version.Stdout))
+	if err := podmanCheckPrintf("version_json_bytes\t%d\n", len(version.Stdout)); err != nil {
+		return err
+	}
 	client := podmanadapter.Client{Binary: cfg.Podman.Binary, Runner: runner}
 	for alias, ctr := range cfg.Containers {
 		st, err := client.InspectContainer(ctx, alias, ctr.ContainerName, ctr.Management)
 		if err != nil {
-			outputf("container\t%s\terror\t%s\n", alias, redaction.Redact(err.Error()))
+			if err := podmanCheckPrintf("container\t%s\terror\t%s\n", alias, redaction.Redact(err.Error())); err != nil {
+				return err
+			}
 			continue
 		}
-		outputf("container\t%s\texists=%t\tstate=%s\thealth=%s\n", alias, st.Exists, st.State, st.Health)
+		if err := podmanCheckPrintf("container\t%s\texists=%t\tstate=%s\thealth=%s\n", alias, st.Exists, st.State, st.Health); err != nil {
+			return err
+		}
 	}
 	return nil
+}
+
+func podmanCheckPrintf(format string, args ...any) error {
+	_, err := outputf(format, args...)
+	return err
 }
 
 func containers(ctx context.Context, args []string) error {

@@ -91,7 +91,7 @@ esac
 	}
 	var buf bytes.Buffer
 	outputf = func(format string, args ...any) (int, error) {
-		return buf.WriteString(fmt.Sprintf(format, args...))
+		return fmt.Fprintf(&buf, format, args...)
 	}
 	if err := run(context.Background(), []string{"podman", "check", "--config", cfg}); err != nil {
 		t.Fatal(err)
