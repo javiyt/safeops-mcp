@@ -327,6 +327,11 @@ func (s *fakeSystemd) Status(_ context.Context, alias, unit string) (service.Sta
 func (s *fakeSystemd) Restart(context.Context, string) error {
 	return s.err
 }
+func (s *fakeSystemd) Start(context.Context, string) error { return s.err }
+func (s *fakeSystemd) Stop(context.Context, string) error  { return s.err }
+func (s *fakeSystemd) ResetFailed(context.Context, string) error {
+	return s.err
+}
 
 func (s *fakeSystemd) StatusWithScope(ctx context.Context, alias, unit, scope string) (service.Status, error) {
 	s.statusScope = scope
@@ -337,6 +342,12 @@ func (s *fakeSystemd) RestartWithScope(ctx context.Context, unit, scope string) 
 	s.restartUnit = unit
 	s.restartScope = scope
 	return s.Restart(ctx, unit)
+}
+func (s *fakeSystemd) StartWithScope(ctx context.Context, unit, scope string) error {
+	return s.RestartWithScope(ctx, unit, scope)
+}
+func (s *fakeSystemd) StopWithScope(ctx context.Context, unit, scope string) error {
+	return s.RestartWithScope(ctx, unit, scope)
 }
 
 type fakeJournal struct {
@@ -376,6 +387,14 @@ func (p *fakePodman) Logs(context.Context, string, int, string) ([]ports.Contain
 	return []ports.ContainerLogEntry{{Message: "ok"}}, false, nil
 }
 func (p *fakePodman) Restart(_ context.Context, name string) error {
+	p.restarted = name
+	return p.restartErr
+}
+func (p *fakePodman) Start(_ context.Context, name string) error {
+	p.restarted = name
+	return p.restartErr
+}
+func (p *fakePodman) Stop(_ context.Context, name string) error {
 	p.restarted = name
 	return p.restartErr
 }

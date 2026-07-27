@@ -21,6 +21,7 @@ import (
 	"github.com/javiyt/safeops-mcp/internal/adapters/outbound/linux/network"
 	podmanadapter "github.com/javiyt/safeops-mcp/internal/adapters/outbound/linux/podman"
 	"github.com/javiyt/safeops-mcp/internal/adapters/outbound/linux/process"
+	"github.com/javiyt/safeops-mcp/internal/adapters/outbound/linux/reboot"
 	"github.com/javiyt/safeops-mcp/internal/adapters/outbound/linux/systemd"
 	"github.com/javiyt/safeops-mcp/internal/adapters/outbound/linux/timestatus"
 	"github.com/javiyt/safeops-mcp/internal/bootstrap"
@@ -67,6 +68,7 @@ func run() error {
 		Journal:     journal.Reader{Runner: runner},
 		Healthcheck: healthcheck.Client{MaxBodyBytes: 4096},
 		Podman:      podmanadapter.Client{Binary: cfg.Podman.Binary, Runner: runner},
+		Rebooter:    reboot.Client{Command: cfg.HostReboot.RebootCommand, CancelCommand: cfg.HostReboot.CancelCommand, Runner: runner},
 	}
 	return (&executorhttp.Server{Config: cfg, Backend: backend, Logger: logger}).ListenAndServe(ctx)
 }

@@ -343,7 +343,7 @@ func TestRequestRestartRequiresAuditPersistence(t *testing.T) {
 func TestConfirmRejectsUnsupportedAction(t *testing.T) {
 	repo := newApprovalRepo()
 	now := time.Date(2026, 7, 24, 10, 0, 0, 0, time.UTC)
-	normalized, err := normalizeAction("restart_host", "service", "service-alpha", "bad", "operator", false)
+	normalized, err := normalizeAction("restart_host", "service", "service-alpha", "bad", "operator", false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -628,6 +628,10 @@ func (r *approvalRepo) Cancel(_ context.Context, id string, userID string, _ tim
 }
 
 func (r *approvalRepo) List(context.Context, int) ([]approval.Approval, error) { return nil, nil }
+func (r *approvalRepo) CountOperationsInProgress(context.Context) (int, error) { return 0, nil }
+func (r *approvalRepo) PruneRecords(context.Context, time.Time, int, bool) (ports.PruneRecordsResponse, error) {
+	return ports.PruneRecordsResponse{Status: "simulated", RecordsToDelete: 1, RecordsRemaining: 1000, DryRun: true}, nil
+}
 func (r *approvalRepo) AcquireOperationLock(context.Context, string, string, string, time.Time) error {
 	if r.locked {
 		return errors.New("resource already has an executing operation")
@@ -707,6 +711,24 @@ func (fakeExecutor) ContainerLogs(context.Context, ports.ContainerLogsRequest) (
 }
 func (fakeExecutor) RestartContainer(context.Context, ports.RestartContainerRequest) (ports.RestartContainerResponse, error) {
 	return ports.RestartContainerResponse{Status: "executed", Action: "restart_container", ResourceKind: "container", Resource: "container-alpha", ContainerState: "running", Health: ports.ContainerHealthResult{Configured: true, Status: "healthy", Attempts: 1}}, nil
+}
+func (fakeExecutor) RestartGroup(context.Context, ports.RestartGroupRequest) (ports.RestartGroupResponse, error) {
+	return ports.RestartGroupResponse{Status: "executed", Action: "restart_group", Group: "app-stack"}, nil
+}
+func (fakeExecutor) RotateLogs(context.Context, ports.RotateLogsRequest) (ports.RotateLogsResponse, error) {
+	return ports.RotateLogsResponse{Status: "simulated", DryRun: true}, nil
+}
+func (fakeExecutor) CleanupCache(context.Context, ports.CleanupCacheRequest) (ports.CleanupCacheResponse, error) {
+	return ports.CleanupCacheResponse{Status: "simulated", DryRun: true}, nil
+}
+func (fakeExecutor) ResetFailureState(context.Context, ports.ResetFailureStateRequest) (ports.ResetFailureStateResponse, error) {
+	return ports.ResetFailureStateResponse{Status: "simulated", ResourceKind: "service", Resource: "service-alpha", ResetOperation: "reset-failed", Result: "simulated"}, nil
+}
+func (fakeExecutor) RebootHost(context.Context, ports.RebootHostRequest) (ports.RebootHostResponse, error) {
+	return ports.RebootHostResponse{Status: "simulated", Action: "reboot_host"}, nil
+}
+func (fakeExecutor) CancelHostReboot(context.Context, ports.RebootHostRequest) (ports.RebootHostResponse, error) {
+	return ports.RebootHostResponse{Status: "executed", Action: "cancel_reboot_host"}, nil
 }
 
 type recordingExecutor struct {

@@ -308,3 +308,40 @@ safeopsctl audit list --limit 50 --config /etc/safeops/config.yaml
 ```
 
 Telegram channel events use component `safeops-telegram` and user IDs such as `telegram:12345678`. Mutable SafeOps events are still produced by `safeops-mcp` and are tied to the configured administrator identity.
+
+## Controlled Maintenance
+
+Configure maintenance by alias. Do not configure broad filesystem locations; use dedicated application log and cache paths:
+
+```yaml
+groups:
+  app-stack:
+    resources: [service-alpha, container-gamma, workload-alpha]
+    order: [container-gamma, service-alpha, workload-alpha]
+    stop_order: [workload-alpha, service-alpha, container-gamma]
+    timeout: 60s
+    health_check: true
+applications:
+  app-worker:
+    cache_path: /var/cache/app-worker
+    cleanup:
+      enabled: true
+      max_age: 24h
+      max_size: 1GB
+audit_retention: 90d
+audit_min_records: 1000
+host_reboot:
+  enabled: false
+```
+
+Dry-run maintenance from the CLI:
+
+```sh
+safeopsctl groups restart app-stack --dry-run --config /etc/safeops/config.yaml
+safeopsctl logs rotate service-alpha --dry-run --config /etc/safeops/config.yaml
+safeopsctl cache cleanup app-worker --dry-run --config /etc/safeops/config.yaml
+safeopsctl records cleanup --max-age 90d --min-records 1000 --dry-run --config /etc/safeops/config.yaml
+safeopsctl reset-failed service-alpha --dry-run --config /etc/safeops/config.yaml
+```
+
+Host reboot is disabled by default. If enabled, configure sudoers outside SafeOps so the executor user can run only the restricted shutdown command without a password. Do not grant broad sudo.

@@ -63,6 +63,12 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	mux.HandleFunc("GET /v1/containers/{alias}/status", s.handleContainerStatus)
 	mux.HandleFunc("POST /v1/containers/logs", s.handleContainerLogs)
 	mux.HandleFunc("POST /v1/containers/restart", s.handleRestartContainer)
+	mux.HandleFunc("POST /v1/maintenance/groups/restart", s.handleRestartGroup)
+	mux.HandleFunc("POST /v1/maintenance/logs/rotate", s.handleRotateLogs)
+	mux.HandleFunc("POST /v1/maintenance/cache/cleanup", s.handleCleanupCache)
+	mux.HandleFunc("POST /v1/maintenance/reset-failure", s.handleResetFailureState)
+	mux.HandleFunc("POST /v1/maintenance/reboot", s.handleRebootHost)
+	mux.HandleFunc("POST /v1/maintenance/reboot/cancel", s.handleCancelHostReboot)
 	s.server = &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	go func() {
 		<-ctx.Done()
@@ -179,6 +185,66 @@ func (s *Server) handleRestartContainer(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	out, err := s.Backend.RestartContainer(r.Context(), req)
+	writeJSON(w, out, err)
+}
+
+func (s *Server) handleRestartGroup(w http.ResponseWriter, r *http.Request) {
+	var req ports.RestartGroupRequest
+	if err := decodeStrict(w, r, &req); err != nil {
+		writeJSON(w, nil, err)
+		return
+	}
+	out, err := s.Backend.RestartGroup(r.Context(), req)
+	writeJSON(w, out, err)
+}
+
+func (s *Server) handleRotateLogs(w http.ResponseWriter, r *http.Request) {
+	var req ports.RotateLogsRequest
+	if err := decodeStrict(w, r, &req); err != nil {
+		writeJSON(w, nil, err)
+		return
+	}
+	out, err := s.Backend.RotateLogs(r.Context(), req)
+	writeJSON(w, out, err)
+}
+
+func (s *Server) handleCleanupCache(w http.ResponseWriter, r *http.Request) {
+	var req ports.CleanupCacheRequest
+	if err := decodeStrict(w, r, &req); err != nil {
+		writeJSON(w, nil, err)
+		return
+	}
+	out, err := s.Backend.CleanupCache(r.Context(), req)
+	writeJSON(w, out, err)
+}
+
+func (s *Server) handleResetFailureState(w http.ResponseWriter, r *http.Request) {
+	var req ports.ResetFailureStateRequest
+	if err := decodeStrict(w, r, &req); err != nil {
+		writeJSON(w, nil, err)
+		return
+	}
+	out, err := s.Backend.ResetFailureState(r.Context(), req)
+	writeJSON(w, out, err)
+}
+
+func (s *Server) handleRebootHost(w http.ResponseWriter, r *http.Request) {
+	var req ports.RebootHostRequest
+	if err := decodeStrict(w, r, &req); err != nil {
+		writeJSON(w, nil, err)
+		return
+	}
+	out, err := s.Backend.RebootHost(r.Context(), req)
+	writeJSON(w, out, err)
+}
+
+func (s *Server) handleCancelHostReboot(w http.ResponseWriter, r *http.Request) {
+	var req ports.RebootHostRequest
+	if err := decodeStrict(w, r, &req); err != nil {
+		writeJSON(w, nil, err)
+		return
+	}
+	out, err := s.Backend.CancelHostReboot(r.Context(), req)
 	writeJSON(w, out, err)
 }
 

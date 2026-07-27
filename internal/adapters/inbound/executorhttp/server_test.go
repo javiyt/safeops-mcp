@@ -199,3 +199,21 @@ func (b fakeBackend) ContainerLogs(context.Context, ports.ContainerLogsRequest) 
 func (b fakeBackend) RestartContainer(context.Context, ports.RestartContainerRequest) (ports.RestartContainerResponse, error) {
 	return ports.RestartContainerResponse{Status: "executed", Action: "restart_container", ResourceKind: "container", Resource: "container-alpha"}, b.err
 }
+func (b fakeBackend) RestartGroup(context.Context, ports.RestartGroupRequest) (ports.RestartGroupResponse, error) {
+	return ports.RestartGroupResponse{Status: "executed", Action: "restart_group", Group: "app-stack"}, b.err
+}
+func (b fakeBackend) RotateLogs(context.Context, ports.RotateLogsRequest) (ports.RotateLogsResponse, error) {
+	return ports.RotateLogsResponse{Status: "simulated"}, b.err
+}
+func (b fakeBackend) CleanupCache(context.Context, ports.CleanupCacheRequest) (ports.CleanupCacheResponse, error) {
+	return ports.CleanupCacheResponse{Status: "simulated"}, b.err
+}
+func (b fakeBackend) ResetFailureState(context.Context, ports.ResetFailureStateRequest) (ports.ResetFailureStateResponse, error) {
+	return ports.ResetFailureStateResponse{Status: "simulated"}, b.err
+}
+func (b fakeBackend) RebootHost(context.Context, ports.RebootHostRequest) (ports.RebootHostResponse, error) {
+	return ports.RebootHostResponse{Status: "simulated", Action: "reboot_host"}, b.err
+}
+func (b fakeBackend) CancelHostReboot(context.Context, ports.RebootHostRequest) (ports.RebootHostResponse, error) {
+	return ports.RebootHostResponse{Status: "executed", Action: "cancel_reboot_host"}, b.err
+}

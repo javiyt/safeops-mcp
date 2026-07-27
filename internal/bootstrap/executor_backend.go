@@ -1,9 +1,15 @@
 package bootstrap
 
 import (
+	"compress/gzip"
 	"context"
 	"fmt"
+	"io"
+	"os"
+	"path/filepath"
 	"sort"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/javiyt/safeops-mcp/internal/config"
@@ -25,6 +31,7 @@ type ExecutorBackend struct {
 	Journal     JournalReader
 	Healthcheck HealthcheckClient
 	Podman      PodmanClient
+	Rebooter    HostRebooter
 }
 
 type HostStatusReader interface {
@@ -62,8 +69,13 @@ type ConfiguredProcessReader interface {
 type SystemdClient interface {
 	Status(ctx context.Context, alias, unit string) (service.Status, error)
 	Restart(ctx context.Context, unit string) error
+	Start(ctx context.Context, unit string) error
+	Stop(ctx context.Context, unit string) error
+	ResetFailed(ctx context.Context, unit string) error
 	StatusWithScope(ctx context.Context, alias, unit, scope string) (service.Status, error)
 	RestartWithScope(ctx context.Context, unit, scope string) error
+	StartWithScope(ctx context.Context, unit, scope string) error
+	StopWithScope(ctx context.Context, unit, scope string) error
 }
 
 type JournalReader interface {
@@ -78,8 +90,15 @@ type PodmanClient interface {
 	InspectContainer(ctx context.Context, alias, name, management string) (ports.ContainerStatus, error)
 	Logs(ctx context.Context, name string, lines int, since string) ([]ports.ContainerLogEntry, bool, error)
 	Restart(ctx context.Context, name string) error
+	Start(ctx context.Context, name string) error
+	Stop(ctx context.Context, name string) error
 	WaitForRunning(ctx context.Context, alias, name, management string, attempts int, interval time.Duration) (ports.ContainerStatus, int, error)
 	WaitForHealth(ctx context.Context, alias, name, management string, attempts int, interval time.Duration) (string, int, error)
+}
+
+type HostRebooter interface {
+	ScheduleReboot(ctx context.Context, delayMinutes int) error
+	CancelReboot(ctx context.Context) error
 }
 
 func (b ExecutorBackend) SystemStatus(ctx context.Context) (ports.SystemStatus, error) {
@@ -383,6 +402,476 @@ func (b ExecutorBackend) RestartContainer(ctx context.Context, req ports.Restart
 		ContainerState: st.State,
 		Health:         ports.ContainerHealthResult{Configured: configured, Status: healthStatus, Attempts: max(runningAttempts, healthAttempts)},
 	}, nil
+}
+
+func (b ExecutorBackend) RestartGroup(ctx context.Context, req ports.RestartGroupRequest) (ports.RestartGroupResponse, error) {
+	group, ok := b.Config.Groups[req.Group]
+	if !ok {
+		return ports.RestartGroupResponse{}, fmt.Errorf("group alias %q is not configured", req.Group)
+	}
+	if req.OperationID == "" {
+		return ports.RestartGroupResponse{}, fmt.Errorf("operation_id is required")
+	}
+	startOrder := group.Order
+	if len(startOrder) == 0 {
+		startOrder = group.Resources
+	}
+	stopOrder := group.StopOrder
+	if len(stopOrder) == 0 {
+		stopOrder = reverseStrings(startOrder)
+	}
+	timeout := group.Timeout.Std()
+	if timeout <= 0 {
+		timeout = b.Config.Limits.OperationTimeout.Std()
+	}
+	runCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	var steps []ports.MaintenanceStep
+	var would []string
+	for _, alias := range stopOrder {
+		cmd, err := b.groupResourceCommand(alias, "stop")
+		if err != nil {
+			return ports.RestartGroupResponse{}, err
+		}
+		would = append(would, cmd)
+		if req.DryRun {
+			steps = append(steps, ports.MaintenanceStep{ResourceKind: b.resourceKind(alias), Resource: alias, Operation: "stop", Status: "simulated"})
+			continue
+		}
+		if err := b.stopResource(runCtx, alias); err != nil {
+			return ports.RestartGroupResponse{}, err
+		}
+		steps = append(steps, ports.MaintenanceStep{ResourceKind: b.resourceKind(alias), Resource: alias, Operation: "stop", Status: "executed"})
+	}
+	for _, alias := range startOrder {
+		cmd, err := b.groupResourceCommand(alias, "start")
+		if err != nil {
+			return ports.RestartGroupResponse{}, err
+		}
+		would = append(would, cmd)
+		if req.DryRun {
+			steps = append(steps, ports.MaintenanceStep{ResourceKind: b.resourceKind(alias), Resource: alias, Operation: "start", Status: "simulated"})
+			continue
+		}
+		if err := b.startResource(runCtx, alias, group.HealthCheck); err != nil {
+			return ports.RestartGroupResponse{}, err
+		}
+		steps = append(steps, ports.MaintenanceStep{ResourceKind: b.resourceKind(alias), Resource: alias, Operation: "start", Status: "executed"})
+	}
+	status := "executed"
+	if req.DryRun {
+		status = "simulated"
+	}
+	return ports.RestartGroupResponse{Status: status, Action: "restart_group", Group: req.Group, Steps: steps, WouldRun: would}, nil
+}
+
+func (b ExecutorBackend) RotateLogs(ctx context.Context, req ports.RotateLogsRequest) (ports.RotateLogsResponse, error) {
+	targets, err := b.logTargets(req.Resource)
+	if err != nil {
+		return ports.RotateLogsResponse{}, err
+	}
+	var out ports.RotateLogsResponse
+	out.Status = "executed"
+	out.DryRun = req.DryRun
+	if req.DryRun {
+		out.Status = "simulated"
+	}
+	var total int64
+	for _, target := range targets {
+		info, err := os.Stat(target.path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return ports.RotateLogsResponse{}, err
+		}
+		if info.IsDir() {
+			return ports.RotateLogsResponse{}, fmt.Errorf("configured log path %q is a directory", target.path)
+		}
+		total += info.Size()
+		if total > b.Config.LogRotation.MaxTotalSize.Int64() {
+			return ports.RotateLogsResponse{}, fmt.Errorf("configured log rotation exceeds max_total_size")
+		}
+		if info.Size() < target.rotation.MaxSize.Int64() && time.Since(info.ModTime()) < target.rotation.MaxAge.Std() {
+			continue
+		}
+		out.Rotated = true
+		out.FilesRotated = append(out.FilesRotated, target.path)
+		out.Compressed = out.Compressed || target.rotation.Compress
+		out.SpaceFreedMB += info.Size() / 1024 / 1024
+		if req.DryRun {
+			continue
+		}
+		deleted, err := rotateOneLog(target.path, target.rotation)
+		if err != nil {
+			return ports.RotateLogsResponse{}, err
+		}
+		out.Deleted = append(out.Deleted, deleted...)
+	}
+	return out, nil
+}
+
+func (b ExecutorBackend) CleanupCache(ctx context.Context, req ports.CleanupCacheRequest) (ports.CleanupCacheResponse, error) {
+	app, ok := b.Config.Applications[req.Resource]
+	if !ok {
+		return ports.CleanupCacheResponse{}, fmt.Errorf("application alias %q is not configured", req.Resource)
+	}
+	cleanup := configCleanup(app.Cleanup, b.Config.CacheCleanup.Default)
+	if !cleanup.Enabled {
+		return ports.CleanupCacheResponse{}, fmt.Errorf("application alias %q does not enable cache cleanup", req.Resource)
+	}
+	ctx, cancel := context.WithTimeout(ctx, cleanup.Timeout.Std())
+	defer cancel()
+	cutoff := time.Now().Add(-cleanup.MaxAge.Std())
+	var files []cacheFile
+	var total int64
+	err := filepath.WalkDir(app.CachePath, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		total += info.Size()
+		if info.ModTime().Before(cutoff) {
+			files = append(files, cacheFile{path: path, size: info.Size(), modTime: info.ModTime()})
+		}
+		return nil
+	})
+	if err != nil {
+		return ports.CleanupCacheResponse{}, err
+	}
+	sort.Slice(files, func(i, j int) bool { return files[i].modTime.Before(files[j].modTime) })
+	for total > cleanup.MaxSize.Int64() && len(files) > 0 {
+		total -= files[0].size
+		files = files[1:]
+	}
+	var bytes int64
+	var oldest time.Duration
+	for _, file := range files {
+		bytes += file.size
+		age := time.Since(file.modTime)
+		if age > oldest {
+			oldest = age
+		}
+	}
+	out := ports.CleanupCacheResponse{Status: "executed", FilesDeleted: len(files), SpaceFreedMB: bytes / 1024 / 1024, OldestFileAge: oldest.Round(time.Second).String(), DryRun: req.DryRun}
+	if req.DryRun {
+		out.Status = "simulated"
+		out.FilesToDelete = len(files)
+		out.SpaceToFreeMB = bytes / 1024 / 1024
+		out.FilesDeleted = 0
+		out.SpaceFreedMB = 0
+		return out, nil
+	}
+	for _, file := range files {
+		if err := os.Remove(file.path); err != nil {
+			return ports.CleanupCacheResponse{}, err
+		}
+	}
+	return out, nil
+}
+
+func (b ExecutorBackend) ResetFailureState(ctx context.Context, req ports.ResetFailureStateRequest) (ports.ResetFailureStateResponse, error) {
+	svc, ok := b.Config.Services[req.Resource]
+	if !ok {
+		if _, container := b.Config.Containers[req.Resource]; container {
+			return ports.ResetFailureStateResponse{Status: "not_applicable", ResourceKind: "container", Resource: req.Resource, ResetOperation: "none", Result: "containers do not support reset-failed"}, nil
+		}
+		return ports.ResetFailureStateResponse{}, fmt.Errorf("service alias %q is not configured", req.Resource)
+	}
+	if req.OperationID == "" {
+		return ports.ResetFailureStateResponse{}, fmt.Errorf("operation_id is required")
+	}
+	if req.DryRun {
+		return ports.ResetFailureStateResponse{Status: "simulated", ResourceKind: "service", Resource: req.Resource, ResetOperation: "reset-failed", Result: "simulated", WouldRun: "/usr/bin/systemctl reset-failed " + svc.Unit}, nil
+	}
+	if err := b.Systemd.ResetFailed(ctx, svc.Unit); err != nil {
+		return ports.ResetFailureStateResponse{}, err
+	}
+	return ports.ResetFailureStateResponse{Status: "executed", ResourceKind: "service", Resource: req.Resource, ResetOperation: "reset-failed", Result: "success"}, nil
+}
+
+func (b ExecutorBackend) RebootHost(ctx context.Context, req ports.RebootHostRequest) (ports.RebootHostResponse, error) {
+	if !b.Config.HostReboot.Enabled {
+		return ports.RebootHostResponse{}, fmt.Errorf("host reboot is disabled")
+	}
+	delay := strings.TrimSpace(req.Delay)
+	if delay == "" {
+		delay = "5m"
+	}
+	d, err := time.ParseDuration(delay)
+	if err != nil || d < 0 || d > b.Config.HostReboot.ConfirmationWindow.Std() {
+		return ports.RebootHostResponse{}, fmt.Errorf("delay must be between 0 and host_reboot.confirmation_window")
+	}
+	minutes := int(d.Round(time.Minute).Minutes())
+	if d > 0 && minutes == 0 {
+		minutes = 1
+	}
+	checks := map[string]any{"recent_backup_exists": !b.Config.HostReboot.RequireBackup, "backup_age": "", "no_operations_in_progress": true}
+	args := []string{"shutdown", "-r", "+" + strconv.Itoa(minutes)}
+	would := b.Config.HostReboot.RebootCommand + " " + strings.Join(args, " ")
+	if req.DryRun {
+		return ports.RebootHostResponse{Status: "simulated", Action: "reboot_host", Delay: delay, ExpectedEffect: "All services will stop and the host will restart.", CheckResults: checks, WouldRun: would}, nil
+	}
+	if b.Rebooter == nil {
+		return ports.RebootHostResponse{}, fmt.Errorf("host reboot execution requires a configured executor reboot runner")
+	}
+	if err := b.Rebooter.ScheduleReboot(ctx, minutes); err != nil {
+		return ports.RebootHostResponse{}, err
+	}
+	return ports.RebootHostResponse{Status: "executed", Action: "reboot_host", Delay: delay, ExpectedEffect: "All services will stop and the host will restart.", CheckResults: checks}, nil
+}
+
+func (b ExecutorBackend) CancelHostReboot(ctx context.Context, req ports.RebootHostRequest) (ports.RebootHostResponse, error) {
+	if !b.Config.HostReboot.Enabled {
+		return ports.RebootHostResponse{}, fmt.Errorf("host reboot is disabled")
+	}
+	if req.DryRun {
+		return ports.RebootHostResponse{Status: "simulated", Action: "cancel_reboot_host", ExpectedEffect: "A scheduled host reboot would be canceled.", WouldRun: b.Config.HostReboot.CancelCommand + " shutdown -c"}, nil
+	}
+	if b.Rebooter == nil {
+		return ports.RebootHostResponse{}, fmt.Errorf("host reboot cancellation requires a configured executor reboot runner")
+	}
+	if err := b.Rebooter.CancelReboot(ctx); err != nil {
+		return ports.RebootHostResponse{}, err
+	}
+	return ports.RebootHostResponse{Status: "executed", Action: "cancel_reboot_host", ExpectedEffect: "Scheduled host reboot was canceled."}, nil
+}
+
+type logTarget struct {
+	path     string
+	rotation config.ResourceLogRotationConfig
+}
+
+type cacheFile struct {
+	path    string
+	size    int64
+	modTime time.Time
+}
+
+func (b ExecutorBackend) logTargets(resource string) ([]logTarget, error) {
+	var targets []logTarget
+	addService := func(alias string, svc config.ServiceConfig) {
+		if svc.LogRotation.Enabled {
+			targets = append(targets, logTarget{path: svc.LogPath, rotation: configLogRotation(svc.LogRotation, b.Config.LogRotation.Default)})
+		}
+	}
+	addContainer := func(alias string, ctr config.ContainerConfig) {
+		if ctr.LogRotation.Enabled {
+			targets = append(targets, logTarget{path: ctr.LogPath, rotation: configLogRotation(ctr.LogRotation, b.Config.LogRotation.Default)})
+		}
+	}
+	if resource != "" {
+		if svc, ok := b.Config.Services[resource]; ok {
+			addService(resource, svc)
+			return targets, nil
+		}
+		if ctr, ok := b.Config.Containers[resource]; ok {
+			addContainer(resource, ctr)
+			return targets, nil
+		}
+		return nil, fmt.Errorf("resource alias %q is not configured", resource)
+	}
+	for alias, svc := range b.Config.Services {
+		addService(alias, svc)
+	}
+	for alias, ctr := range b.Config.Containers {
+		addContainer(alias, ctr)
+	}
+	if len(targets) == 0 {
+		return nil, fmt.Errorf("no configured logs enable rotation")
+	}
+	return targets, nil
+}
+
+func configLogRotation(local, def config.ResourceLogRotationConfig) config.ResourceLogRotationConfig {
+	if local.MaxSize.Int64() == 0 {
+		local.MaxSize = def.MaxSize
+	}
+	if local.MaxAge.Std() == 0 {
+		local.MaxAge = def.MaxAge
+	}
+	if local.Keep == 0 {
+		local.Keep = def.Keep
+	}
+	return local
+}
+
+func configCleanup(local, def config.ResourceCleanupConfig) config.ResourceCleanupConfig {
+	if local.MaxAge.Std() == 0 {
+		local.MaxAge = def.MaxAge
+	}
+	if local.MaxSize.Int64() == 0 {
+		local.MaxSize = def.MaxSize
+	}
+	if local.Timeout.Std() == 0 {
+		local.Timeout = def.Timeout
+	}
+	return local
+}
+
+func rotateOneLog(path string, rotation config.ResourceLogRotationConfig) ([]string, error) {
+	var deleted []string
+	for i := rotation.Keep; i >= 1; i-- {
+		old := path + "." + strconv.Itoa(i)
+		if rotation.Compress {
+			old += ".gz"
+		}
+		if i == rotation.Keep {
+			if err := os.Remove(old); err == nil {
+				deleted = append(deleted, old)
+			} else if !os.IsNotExist(err) {
+				return deleted, err
+			}
+			continue
+		}
+		next := path + "." + strconv.Itoa(i+1)
+		if rotation.Compress {
+			next += ".gz"
+		}
+		if err := os.Rename(old, next); err != nil && !os.IsNotExist(err) {
+			return deleted, err
+		}
+	}
+	rotated := path + ".1"
+	if err := os.Rename(path, rotated); err != nil {
+		return deleted, err
+	}
+	if rotation.Compress {
+		gzPath := rotated + ".gz"
+		if err := gzipFile(rotated, gzPath); err != nil {
+			return deleted, err
+		}
+		if err := os.Remove(rotated); err != nil {
+			return deleted, err
+		}
+	}
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o640)
+	if err != nil {
+		return deleted, err
+	}
+	return deleted, file.Close()
+}
+
+func gzipFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = in.Close() }()
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = out.Close() }()
+	writer := gzip.NewWriter(out)
+	if _, err := io.Copy(writer, in); err != nil {
+		_ = writer.Close()
+		return err
+	}
+	return writer.Close()
+}
+
+func reverseStrings(values []string) []string {
+	out := make([]string, len(values))
+	for i := range values {
+		out[len(values)-1-i] = values[i]
+	}
+	return out
+}
+
+func (b ExecutorBackend) resourceKind(alias string) string {
+	if _, ok := b.Config.Services[alias]; ok {
+		return "service"
+	}
+	return "container"
+}
+
+func (b ExecutorBackend) groupResourceCommand(alias, op string) (string, error) {
+	if svc, ok := b.Config.Services[alias]; ok {
+		return "/usr/bin/systemctl " + op + " " + svc.Unit, nil
+	}
+	if ctr, ok := b.Config.Containers[alias]; ok {
+		if ctr.Management == "quadlet" {
+			scope := b.Config.Podman.SystemdScope
+			if scope == "user" {
+				return "/usr/bin/systemctl --user " + op + " " + ctr.QuadletUnit, nil
+			}
+			return "/usr/bin/systemctl " + op + " " + ctr.QuadletUnit, nil
+		}
+		return b.Config.Podman.Binary + " " + op + " " + ctr.ContainerName, nil
+	}
+	return "", fmt.Errorf("resource alias %q is not configured", alias)
+}
+
+func (b ExecutorBackend) stopResource(ctx context.Context, alias string) error {
+	if svc, ok := b.Config.Services[alias]; ok {
+		return b.Systemd.Stop(ctx, svc.Unit)
+	}
+	ctr, ok := b.Config.Containers[alias]
+	if !ok {
+		return fmt.Errorf("resource alias %q is not configured", alias)
+	}
+	if ctr.Management == "quadlet" {
+		scope := b.Config.Podman.SystemdScope
+		if scope == "" {
+			scope = "system"
+		}
+		return b.Systemd.StopWithScope(ctx, ctr.QuadletUnit, scope)
+	}
+	return b.Podman.Stop(ctx, ctr.ContainerName)
+}
+
+func (b ExecutorBackend) startResource(ctx context.Context, alias string, healthCheck bool) error {
+	if svc, ok := b.Config.Services[alias]; ok {
+		if err := b.Systemd.Start(ctx, svc.Unit); err != nil {
+			return err
+		}
+		if healthCheck && svc.Healthcheck != nil {
+			healthy, _ := b.Healthcheck.Check(ctx, svc.Healthcheck.URL, svc.Healthcheck.Timeout.Std(), svc.Healthcheck.Attempts, svc.Healthcheck.Interval.Std())
+			if !healthy {
+				return fmt.Errorf("service alias %q failed health check", alias)
+			}
+		}
+		return nil
+	}
+	ctr, ok := b.Config.Containers[alias]
+	if !ok {
+		return fmt.Errorf("resource alias %q is not configured", alias)
+	}
+	if ctr.Management == "quadlet" {
+		scope := b.Config.Podman.SystemdScope
+		if scope == "" {
+			scope = "system"
+		}
+		if err := b.Systemd.StartWithScope(ctx, ctr.QuadletUnit, scope); err != nil {
+			return err
+		}
+	} else if err := b.Podman.Start(ctx, ctr.ContainerName); err != nil {
+		return err
+	}
+	if healthCheck {
+		attempts := ctr.Health.Attempts
+		if attempts == 0 {
+			attempts = b.Config.Limits.MaxHealthcheckAttempts
+		}
+		interval := ctr.Health.Interval.Std()
+		if interval <= 0 {
+			interval = 2 * time.Second
+		}
+		if _, _, err := b.Podman.WaitForRunning(ctx, alias, ctr.ContainerName, ctr.Management, attempts, interval); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (b ExecutorBackend) cpuFindings(st ports.CPUStatus) []ports.HealthFinding {

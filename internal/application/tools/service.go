@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/javiyt/safeops-mcp/internal/config"
@@ -42,13 +43,49 @@ type RequestContainerRestartInput struct {
 	Reason    string `json:"reason"`
 }
 
+type RequestGroupRestartInput struct {
+	Group  string `json:"group"`
+	Reason string `json:"reason"`
+}
+
+type RotateConfiguredLogsInput struct {
+	Resource string `json:"resource"`
+	DryRun   bool   `json:"dry_run"`
+	Reason   string `json:"reason"`
+}
+
+type CleanupApplicationCacheInput struct {
+	Resource string `json:"resource"`
+	DryRun   bool   `json:"dry_run"`
+	Reason   string `json:"reason"`
+}
+
+type RemoveExpiredSafeOpsRecordsInput struct {
+	MaxAge     string `json:"max_age"`
+	MinRecords int    `json:"min_records"`
+	DryRun     bool   `json:"dry_run"`
+	Reason     string `json:"reason"`
+}
+
+type ResetFailureStateInput struct {
+	Resource string `json:"resource"`
+	DryRun   bool   `json:"dry_run"`
+	Reason   string `json:"reason"`
+}
+
+type RequestHostRebootInput struct {
+	Reason string `json:"reason"`
+	Delay  string `json:"delay"`
+}
+
 type RequestRestartOutput struct {
-	Status           string `json:"status"`
-	ApprovalID       string `json:"approval_id"`
-	ConfirmationCode string `json:"confirmation_code"`
-	ExpiresAt        string `json:"expires_at"`
-	Summary          string `json:"summary"`
-	ExpectedEffect   string `json:"expected_effect"`
+	Status           string         `json:"status"`
+	ApprovalID       string         `json:"approval_id"`
+	ConfirmationCode string         `json:"confirmation_code"`
+	ExpiresAt        string         `json:"expires_at"`
+	Summary          string         `json:"summary"`
+	ExpectedEffect   string         `json:"expected_effect"`
+	CheckResults     map[string]any `json:"check_results,omitempty"`
 }
 
 type ConfirmInput struct {
@@ -67,6 +104,7 @@ type ConfirmOutput struct {
 	Health         *ports.ContainerHealthResult `json:"health,omitempty"`
 	Healthcheck    *ports.HealthcheckResult     `json:"healthcheck,omitempty"`
 	WouldRun       string                       `json:"would_run,omitempty"`
+	Result         any                          `json:"result,omitempty"`
 }
 
 type ListAlertsInput struct {
@@ -247,23 +285,124 @@ func (s Service) RequestContainerRestart(ctx context.Context, userID string, inp
 	return s.requestRestart(ctx, userID, "request_container_restart", action.TypeRestartContainer, action.ResourceContainer, input.Container, input.Reason)
 }
 
-func (s Service) requestRestart(ctx context.Context, userID, tool string, act action.Type, kind action.ResourceKind, alias, reason string) (RequestRestartOutput, error) {
-	if s.Policy.Decide(action.RiskMutating) != policy.DecisionRequireApproval {
-		return RequestRestartOutput{}, errors.New("restart policy must require approval")
+func (s Service) RequestGroupRestart(ctx context.Context, userID string, input RequestGroupRestartInput) (RequestRestartOutput, error) {
+	group, ok := s.Config.Groups[input.Group]
+	if !ok {
+		return RequestRestartOutput{}, fmt.Errorf("group %q is not configured", input.Group)
 	}
-	if !s.permissionFor(kind, alias, "restart", "confirm") {
-		return RequestRestartOutput{}, fmt.Errorf("%s %q does not permit restart requests", kind, alias)
+	order := group.Order
+	if len(order) == 0 {
+		order = group.Resources
+	}
+	return s.requestApproval(ctx, userID, "request_group_restart", action.TypeRestartGroup, action.ResourceGroup, input.Group, input.Reason, map[string]any{"order": order}, "high", "Restart group "+input.Group, fmt.Sprintf("Resources will be unavailable for about %s.", groupTimeout(s.Config, group)))
+}
+
+func (s Service) RotateConfiguredLogs(ctx context.Context, userID string, input RotateConfiguredLogsInput) (any, error) {
+	if input.DryRun {
+		out, err := s.Executor.RotateLogs(ctx, ports.RotateLogsRequest{Resource: input.Resource, DryRun: true})
+		if err == nil {
+			err = s.audit(ctx, userID, "maintenance_simulated", "rotate_configured_logs", string(action.TypeRotateLogs), fmt.Sprintf(`{"resource":%q,"dry_run":true}`, input.Resource), "mutating", "allow", "simulated", "", "")
+		}
+		return out, err
+	}
+	return s.requestApproval(ctx, userID, "rotate_configured_logs", action.TypeRotateLogs, action.ResourceLog, input.Resource, input.Reason, nil, "medium", "Rotate configured logs", "Configured logs may be rotated, compressed, and old rotations removed.")
+}
+
+func (s Service) CleanupApplicationCache(ctx context.Context, userID string, input CleanupApplicationCacheInput) (any, error) {
+	if input.DryRun {
+		out, err := s.Executor.CleanupCache(ctx, ports.CleanupCacheRequest{Resource: input.Resource, DryRun: true})
+		if err == nil {
+			err = s.audit(ctx, userID, "maintenance_simulated", "cleanup_application_cache", string(action.TypeCleanupCache), fmt.Sprintf(`{"resource":%q,"dry_run":true}`, input.Resource), "mutating", "allow", "simulated", "", "")
+		}
+		return out, err
+	}
+	return s.requestApproval(ctx, userID, "cleanup_application_cache", action.TypeCleanupCache, action.ResourceCache, input.Resource, input.Reason, nil, "medium", "Clean application cache "+input.Resource, "Configured cache files may be removed within age, size, and timeout limits.")
+}
+
+func (s Service) RemoveExpiredSafeOpsRecords(ctx context.Context, userID string, input RemoveExpiredSafeOpsRecordsInput) (any, error) {
+	maxAge, minRecords, err := s.recordsLimits(input)
+	if err != nil {
+		return nil, err
+	}
+	if input.DryRun {
+		out, err := s.Approvals.PruneRecords(ctx, s.Clock.Now().Add(-maxAge), minRecords, true)
+		if err == nil {
+			err = s.audit(ctx, userID, "maintenance_simulated", "remove_expired_safeops_records", string(action.TypeRemoveRecords), fmt.Sprintf(`{"max_age":%q,"min_records":%d,"dry_run":true}`, maxAge.String(), minRecords), "mutating", "allow", "simulated", "", "")
+		}
+		return out, err
+	}
+	return s.requestApproval(ctx, userID, "remove_expired_safeops_records", action.TypeRemoveRecords, action.ResourceRecord, "safeops-records", input.Reason, map[string]any{"max_age": maxAge.String(), "min_records": minRecords}, "medium", "Remove expired SafeOps records", "Old audit and approval records may be deleted while keeping the configured minimum.")
+}
+
+func (s Service) ResetResourceFailureState(ctx context.Context, userID string, input ResetFailureStateInput) (any, error) {
+	if _, ok := s.Config.Containers[input.Resource]; ok {
+		return ports.ResetFailureStateResponse{Status: "not_applicable", ResourceKind: "container", Resource: input.Resource, ResetOperation: "none", Result: "use request_container_restart for containers"}, nil
+	}
+	if _, ok := s.Config.Services[input.Resource]; !ok {
+		return nil, fmt.Errorf("service %q is not configured", input.Resource)
+	}
+	if input.DryRun {
+		out, err := s.Executor.ResetFailureState(ctx, ports.ResetFailureStateRequest{Resource: input.Resource, DryRun: true})
+		if err == nil {
+			err = s.audit(ctx, userID, "maintenance_simulated", "reset_resource_failure_state", string(action.TypeResetFailure), fmt.Sprintf(`{"resource":%q,"dry_run":true}`, input.Resource), "mutating", "allow", "simulated", "", "")
+		}
+		return out, err
+	}
+	return s.requestApproval(ctx, userID, "reset_resource_failure_state", action.TypeResetFailure, action.ResourceFailureState, input.Resource, input.Reason, nil, "low", "Reset failure state for "+input.Resource, "The systemd failed state will be cleared for the configured service.")
+}
+
+func (s Service) RequestHostReboot(ctx context.Context, userID string, input RequestHostRebootInput) (RequestRestartOutput, error) {
+	if !s.Config.HostReboot.Enabled {
+		return RequestRestartOutput{}, errors.New("host reboot is disabled")
+	}
+	if len(s.Config.HostReboot.AllowedUsers) > 0 && !containsString(s.Config.HostReboot.AllowedUsers, userID) {
+		return RequestRestartOutput{}, errors.New("user is not allowed to request host reboot")
+	}
+	inProgress, err := s.Approvals.CountOperationsInProgress(ctx)
+	if err != nil {
+		return RequestRestartOutput{}, err
+	}
+	if inProgress > 0 {
+		return RequestRestartOutput{}, errors.New("mutable operations are currently in progress")
+	}
+	out, err := s.requestApprovalWithCodeLength(ctx, userID, "request_host_reboot", action.TypeRebootHost, action.ResourceHost, "host", input.Reason, map[string]any{"delay": input.Delay}, "critical", "Reboot the host.", "All services will be stopped and the system will restart.", s.Config.HostReboot.ConfirmationCodeLength, s.Config.HostReboot.ConfirmationWindow.Std())
+	if err == nil {
+		out.CheckResults = map[string]any{"no_operations_in_progress": true, "recent_backup_exists": !s.Config.HostReboot.RequireBackup, "backup_age": ""}
+	}
+	return out, err
+}
+
+func (s Service) requestRestart(ctx context.Context, userID, tool string, act action.Type, kind action.ResourceKind, alias, reason string) (RequestRestartOutput, error) {
+	noun := "service"
+	effect := "The service may be unavailable for a few seconds."
+	if kind == action.ResourceContainer {
+		noun = "container"
+		effect = "The container may be unavailable for a few seconds."
+	}
+	return s.requestApproval(ctx, userID, tool, act, kind, alias, reason, nil, "mutating", "Restart "+noun+" "+alias, effect)
+}
+
+func (s Service) requestApproval(ctx context.Context, userID, tool string, act action.Type, kind action.ResourceKind, alias, reason string, extra map[string]any, risk, summary, effect string) (RequestRestartOutput, error) {
+	return s.requestApprovalWithCodeLength(ctx, userID, tool, act, kind, alias, reason, extra, risk, summary, effect, s.Config.ConfirmationCodeLength(), s.Config.ApprovalExpiration())
+}
+
+func (s Service) requestApprovalWithCodeLength(ctx context.Context, userID, tool string, act action.Type, kind action.ResourceKind, alias, reason string, extra map[string]any, risk, summary, effect string, codeLength int, expiration time.Duration) (RequestRestartOutput, error) {
+	if s.Policy.Decide(action.RiskMutating) != policy.DecisionRequireApproval {
+		return RequestRestartOutput{}, errors.New("mutable policy must require approval")
+	}
+	if err := s.validateActionAllowed(kind, alias); err != nil {
+		return RequestRestartOutput{}, err
 	}
 	now := s.Clock.Now()
 	approvalID, err := s.IDs.NewID("apr")
 	if err != nil {
 		return RequestRestartOutput{}, err
 	}
-	code, err := s.Codes.NewCode(s.Config.ConfirmationCodeLength())
+	code, err := s.Codes.NewCode(codeLength)
 	if err != nil {
 		return RequestRestartOutput{}, err
 	}
-	normalized, err := normalizeAction(act, kind, alias, reason, userID, s.Config.Policies.DryRun)
+	normalized, err := normalizeAction(act, kind, alias, reason, userID, s.Config.Policies.DryRun, extra)
 	if err != nil {
 		return RequestRestartOutput{}, err
 	}
@@ -279,7 +418,7 @@ func (s Service) requestRestart(ctx context.Context, userID, tool string, act ac
 		ConfirmationCodeHash: hashString(code),
 		Status:               approval.StatusPending,
 		CreatedAt:            now,
-		ExpiresAt:            now.Add(s.Config.ApprovalExpiration()),
+		ExpiresAt:            now.Add(expiration),
 	}
 	if err := s.Approvals.Create(ctx, a); err != nil {
 		return RequestRestartOutput{}, err
@@ -288,21 +427,15 @@ func (s Service) requestRestart(ctx context.Context, userID, tool string, act ac
 	if kind == action.ResourceContainer {
 		eventType = "container_restart_requested"
 	}
-	if err := s.audit(ctx, userID, eventType, tool, string(act), string(normalized), "mutating", "require_approval", "pending", approvalID, ""); err != nil {
+	if err := s.audit(ctx, userID, eventType, tool, string(act), string(normalized), risk, "require_approval", "pending", approvalID, ""); err != nil {
 		return RequestRestartOutput{}, err
-	}
-	noun := "service"
-	effect := "The service may be unavailable for a few seconds."
-	if kind == action.ResourceContainer {
-		noun = "container"
-		effect = "The container may be unavailable for a few seconds."
 	}
 	return RequestRestartOutput{
 		Status:           "approval_required",
 		ApprovalID:       approvalID,
 		ConfirmationCode: code,
 		ExpiresAt:        a.ExpiresAt.Format(time.RFC3339),
-		Summary:          "Restart " + noun + " " + alias,
+		Summary:          summary,
 		ExpectedEffect:   effect,
 	}, nil
 }
@@ -337,10 +470,11 @@ func (s Service) ConfirmAction(ctx context.Context, userID string, input Confirm
 			a.ResourceAlias = v
 		}
 	}
-	if !s.permissionFor(action.ResourceKind(a.ResourceKind), a.ResourceAlias, "restart", "confirm") {
-		return ConfirmOutput{}, errors.New("restart is no longer permitted by configuration")
+	if err := s.validateActionAllowed(action.ResourceKind(a.ResourceKind), a.ResourceAlias); err != nil {
+		return ConfirmOutput{}, err
 	}
-	normalized, err := normalizeAction(action.Type(a.Action), action.ResourceKind(a.ResourceKind), a.ResourceAlias, argumentReason(a.NormalizedArguments), userID, s.Config.Policies.DryRun)
+	extra := argumentExtra(a.NormalizedArguments)
+	normalized, err := normalizeAction(action.Type(a.Action), action.ResourceKind(a.ResourceKind), a.ResourceAlias, argumentReason(a.NormalizedArguments), userID, s.Config.Policies.DryRun, extra)
 	if err != nil {
 		return ConfirmOutput{}, err
 	}
@@ -406,6 +540,28 @@ func (s Service) executeApproved(ctx context.Context, a approval.Approval, opID 
 		return s.Executor.RestartService(ctx, ports.RestartServiceRequest{Service: a.ResourceAlias, OperationID: opID, DryRun: s.Config.Policies.DryRun})
 	case action.TypeRestartContainer:
 		return s.Executor.RestartContainer(ctx, ports.RestartContainerRequest{ContainerAlias: a.ResourceAlias, OperationID: opID, DryRun: s.Config.Policies.DryRun})
+	case action.TypeRestartGroup:
+		return s.Executor.RestartGroup(ctx, ports.RestartGroupRequest{Group: a.ResourceAlias, OperationID: opID, DryRun: s.Config.Policies.DryRun})
+	case action.TypeRotateLogs:
+		return s.Executor.RotateLogs(ctx, ports.RotateLogsRequest{Resource: a.ResourceAlias, OperationID: opID, DryRun: s.Config.Policies.DryRun})
+	case action.TypeCleanupCache:
+		return s.Executor.CleanupCache(ctx, ports.CleanupCacheRequest{Resource: a.ResourceAlias, OperationID: opID, DryRun: s.Config.Policies.DryRun})
+	case action.TypeRemoveRecords:
+		extra := argumentExtra(a.NormalizedArguments)
+		maxAge, _ := time.ParseDuration(fmt.Sprint(extra["max_age"]))
+		minRecords := s.Config.AuditMinRecords
+		if v, ok := extra["min_records"].(float64); ok {
+			minRecords = int(v)
+		}
+		return s.Approvals.PruneRecords(ctx, s.Clock.Now().Add(-maxAge), minRecords, s.Config.Policies.DryRun)
+	case action.TypeResetFailure:
+		return s.Executor.ResetFailureState(ctx, ports.ResetFailureStateRequest{Resource: a.ResourceAlias, OperationID: opID, DryRun: s.Config.Policies.DryRun})
+	case action.TypeRebootHost:
+		delay := ""
+		if v, ok := argumentExtra(a.NormalizedArguments)["delay"].(string); ok {
+			delay = v
+		}
+		return s.Executor.RebootHost(ctx, ports.RebootHostRequest{Delay: delay, OperationID: opID, DryRun: s.Config.Policies.DryRun})
 	default:
 		return nil, fmt.Errorf("action %q is not supported", a.Action)
 	}
@@ -418,6 +574,18 @@ func confirmOutput(out any) ConfirmOutput {
 	case ports.RestartContainerResponse:
 		health := v.Health
 		return ConfirmOutput{Status: v.Status, Action: v.Action, ResourceKind: v.ResourceKind, Resource: v.Resource, ContainerState: v.ContainerState, Health: &health, WouldRun: v.WouldRun}
+	case ports.RestartGroupResponse:
+		return ConfirmOutput{Status: v.Status, Action: v.Action, ResourceKind: "group", Resource: v.Group, Result: v, WouldRun: strings.Join(v.WouldRun, "\n")}
+	case ports.RotateLogsResponse:
+		return ConfirmOutput{Status: v.Status, Action: string(action.TypeRotateLogs), ResourceKind: "log", Result: v}
+	case ports.CleanupCacheResponse:
+		return ConfirmOutput{Status: v.Status, Action: string(action.TypeCleanupCache), ResourceKind: "cache", Result: v}
+	case ports.PruneRecordsResponse:
+		return ConfirmOutput{Status: v.Status, Action: string(action.TypeRemoveRecords), ResourceKind: "record", Resource: "safeops-records", Result: v}
+	case ports.ResetFailureStateResponse:
+		return ConfirmOutput{Status: v.Status, Action: string(action.TypeResetFailure), ResourceKind: v.ResourceKind, Resource: v.Resource, Result: v, WouldRun: v.WouldRun}
+	case ports.RebootHostResponse:
+		return ConfirmOutput{Status: v.Status, Action: v.Action, ResourceKind: "host", Resource: "host", Result: v, WouldRun: v.WouldRun}
 	default:
 		return ConfirmOutput{Status: "unknown"}
 	}
@@ -474,6 +642,16 @@ func (s Service) ContainerLogs(ctx context.Context, req ports.ContainerLogsReque
 }
 
 func (s Service) CancelAction(ctx context.Context, userID string, approvalID string) error {
+	a, getErr := s.Approvals.Get(ctx, approvalID)
+	if getErr == nil && a.UserID == userID && a.Action == string(action.TypeRebootHost) && (a.Status == approval.StatusExecuted || a.Status == approval.StatusExecuting || a.Status == approval.StatusSimulated) {
+		if _, err := s.Executor.CancelHostReboot(ctx, ports.RebootHostRequest{OperationID: a.OperationID, DryRun: s.Config.Policies.DryRun}); err != nil {
+			return err
+		}
+		if err := s.Approvals.MarkDone(ctx, approvalID, approval.StatusRejected, "host reboot canceled", "", s.Clock.Now()); err != nil {
+			return err
+		}
+		return s.audit(ctx, userID, "host_reboot_canceled", "cancel_action", string(action.TypeRebootHost), a.NormalizedArguments, "critical", "require_approval", "rejected", approvalID, a.OperationID)
+	}
 	if err := s.Approvals.Cancel(ctx, approvalID, userID, s.Clock.Now()); err != nil {
 		return err
 	}
@@ -531,15 +709,19 @@ func (s Service) permissionFor(kind action.ResourceKind, alias, name, expected s
 	}
 }
 
-func normalizeAction(act action.Type, kind action.ResourceKind, alias, reason, userID string, dryRun bool) ([]byte, error) {
-	return json.Marshal(map[string]any{
+func normalizeAction(act action.Type, kind action.ResourceKind, alias, reason, userID string, dryRun bool, extra map[string]any) ([]byte, error) {
+	args := map[string]any{
 		"action_type":    act,
 		"resource_kind":  kind,
 		"resource_alias": alias,
 		"reason":         reason,
 		"user_id":        userID,
 		"dry_run":        dryRun,
-	})
+	}
+	for k, v := range extra {
+		args[k] = v
+	}
+	return json.Marshal(args)
 }
 
 func argumentReason(raw string) string {
@@ -551,6 +733,127 @@ func argumentReason(raw string) string {
 		return v
 	}
 	return ""
+}
+
+func argumentExtra(raw string) map[string]any {
+	var args map[string]any
+	if err := json.Unmarshal([]byte(raw), &args); err != nil {
+		return nil
+	}
+	delete(args, "action_type")
+	delete(args, "resource_kind")
+	delete(args, "resource_alias")
+	delete(args, "reason")
+	delete(args, "user_id")
+	delete(args, "dry_run")
+	return args
+}
+
+func (s Service) validateActionAllowed(kind action.ResourceKind, alias string) error {
+	switch kind {
+	case action.ResourceService, action.ResourceContainer:
+		if !s.permissionFor(kind, alias, "restart", "confirm") {
+			return fmt.Errorf("%s %q does not permit restart requests", kind, alias)
+		}
+	case action.ResourceGroup:
+		group, ok := s.Config.Groups[alias]
+		if !ok {
+			return fmt.Errorf("group %q is not configured", alias)
+		}
+		for _, resource := range group.Resources {
+			if _, ok := s.Config.Services[resource]; ok {
+				if !s.permissionFor(action.ResourceService, resource, "restart", "confirm") {
+					return fmt.Errorf("group %q contains service %q without restart confirmation permission", alias, resource)
+				}
+				continue
+			}
+			if _, ok := s.Config.Containers[resource]; ok {
+				if !s.permissionFor(action.ResourceContainer, resource, "restart", "confirm") {
+					return fmt.Errorf("group %q contains container %q without restart confirmation permission", alias, resource)
+				}
+				continue
+			}
+			return fmt.Errorf("group %q contains unknown resource %q", alias, resource)
+		}
+	case action.ResourceLog:
+		if alias == "" {
+			return nil
+		}
+		if svc, ok := s.Config.Services[alias]; ok && svc.LogRotation.Enabled {
+			return nil
+		}
+		if ctr, ok := s.Config.Containers[alias]; ok && ctr.LogRotation.Enabled {
+			return nil
+		}
+		return fmt.Errorf("resource %q does not enable log rotation", alias)
+	case action.ResourceCache:
+		app, ok := s.Config.Applications[alias]
+		if !ok || !app.Cleanup.Enabled {
+			return fmt.Errorf("application %q does not enable cache cleanup", alias)
+		}
+	case action.ResourceRecord:
+		if alias != "safeops-records" {
+			return fmt.Errorf("record resource %q is not configured", alias)
+		}
+	case action.ResourceFailureState:
+		if _, ok := s.Config.Services[alias]; !ok {
+			return fmt.Errorf("service %q is not configured for reset-failed", alias)
+		}
+	case action.ResourceHost:
+		if !s.Config.HostReboot.Enabled || alias != "host" {
+			return errors.New("host reboot is disabled")
+		}
+	default:
+		return fmt.Errorf("resource kind %q is not supported", kind)
+	}
+	return nil
+}
+
+func (s Service) recordsLimits(input RemoveExpiredSafeOpsRecordsInput) (time.Duration, int, error) {
+	maxAge := s.Config.AuditRetention.Std()
+	if strings.TrimSpace(input.MaxAge) != "" {
+		parsed, err := parseMaintenanceDuration(input.MaxAge)
+		if err != nil {
+			return 0, 0, fmt.Errorf("max_age must be a duration such as 2160h or 90d")
+		}
+		maxAge = parsed
+	}
+	minRecords := s.Config.AuditMinRecords
+	if input.MinRecords > 0 {
+		minRecords = input.MinRecords
+	}
+	if maxAge <= 0 || minRecords < 0 {
+		return 0, 0, errors.New("record cleanup limits are invalid")
+	}
+	return maxAge, minRecords, nil
+}
+
+func parseMaintenanceDuration(raw string) (time.Duration, error) {
+	raw = strings.TrimSpace(raw)
+	if strings.HasSuffix(raw, "d") {
+		days, err := time.ParseDuration(strings.TrimSuffix(raw, "d") + "h")
+		if err != nil {
+			return 0, err
+		}
+		return days * 24, nil
+	}
+	return time.ParseDuration(raw)
+}
+
+func groupTimeout(cfg config.Config, group config.GroupConfig) time.Duration {
+	if group.Timeout.Std() > 0 {
+		return group.Timeout.Std()
+	}
+	return cfg.Limits.OperationTimeout.Std()
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
 
 func allowedPriority(value string) bool {

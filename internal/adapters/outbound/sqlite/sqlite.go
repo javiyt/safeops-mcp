@@ -10,6 +10,7 @@ import (
 	"github.com/javiyt/safeops-mcp/internal/domain/alert"
 	"github.com/javiyt/safeops-mcp/internal/domain/approval"
 	"github.com/javiyt/safeops-mcp/internal/domain/audit"
+	"github.com/javiyt/safeops-mcp/internal/ports"
 	"github.com/javiyt/safeops-mcp/migrations"
 	_ "modernc.org/sqlite"
 )
@@ -204,6 +205,85 @@ func (s *Store) ReleaseOperationLock(ctx context.Context, resourceKind, resource
 	_, err := s.db.ExecContext(ctx, `DELETE FROM operation_locks WHERE resource_kind = ? AND resource_alias = ? AND operation_id = ?`,
 		resourceKind, resourceAlias, operationID)
 	return err
+}
+
+func (s *Store) CountOperationsInProgress(ctx context.Context) (int, error) {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM operation_locks WHERE expires_at <= ?`, now); err != nil {
+		return 0, err
+	}
+	var count int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM operation_locks`).Scan(&count)
+	return count, err
+}
+
+func (s *Store) PruneRecords(ctx context.Context, before time.Time, minRecords int, dryRun bool) (ports.PruneRecordsResponse, error) {
+	countEligible := func(table string) (int64, error) {
+		var count int64
+		err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM `+table+` WHERE created_at < ?`, formatTime(before)).Scan(&count)
+		if table == "audit_events" {
+			err = s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM audit_events WHERE timestamp < ?`, formatTime(before)).Scan(&count)
+		}
+		return count, err
+	}
+	countTotal := func(table string) (int64, error) {
+		var count int64
+		err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM `+table).Scan(&count)
+		return count, err
+	}
+	auditEligible, err := countEligible("audit_events")
+	if err != nil {
+		return ports.PruneRecordsResponse{}, err
+	}
+	approvalEligible, err := countEligible("approvals")
+	if err != nil {
+		return ports.PruneRecordsResponse{}, err
+	}
+	auditTotal, err := countTotal("audit_events")
+	if err != nil {
+		return ports.PruneRecordsResponse{}, err
+	}
+	approvalTotal, err := countTotal("approvals")
+	if err != nil {
+		return ports.PruneRecordsResponse{}, err
+	}
+	total := auditTotal + approvalTotal
+	eligible := auditEligible + approvalEligible
+	maxDelete := total - int64(minRecords)
+	if maxDelete < 0 {
+		maxDelete = 0
+	}
+	toDelete := min(eligible, maxDelete)
+	out := ports.PruneRecordsResponse{Status: "simulated", RecordsToDelete: toDelete, RecordsRemaining: total - toDelete, DryRun: dryRun}
+	if dryRun || toDelete == 0 {
+		return out, nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return ports.PruneRecordsResponse{}, err
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+	remaining := toDelete
+	auditDelete := min(auditEligible, remaining)
+	if auditDelete > 0 {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM audit_events WHERE id IN (SELECT id FROM audit_events WHERE timestamp < ? ORDER BY timestamp ASC LIMIT ?)`, formatTime(before), auditDelete); err != nil {
+			return ports.PruneRecordsResponse{}, err
+		}
+		remaining -= auditDelete
+	}
+	if remaining > 0 {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM approvals WHERE id IN (SELECT id FROM approvals WHERE created_at < ? ORDER BY created_at ASC LIMIT ?)`, formatTime(before), remaining); err != nil {
+			return ports.PruneRecordsResponse{}, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return ports.PruneRecordsResponse{}, err
+	}
+	out.Status = "executed"
+	out.RecordsDeleted = toDelete
+	return out, nil
 }
 
 func (s *Store) Append(ctx context.Context, e audit.Event) error {

@@ -46,7 +46,7 @@ func main() {
 
 func run(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: safeopsctl <validate-config|migrate|approvals|audit|alerts|podman|containers|diagnostics> [args]")
+		return fmt.Errorf("usage: safeopsctl <validate-config|migrate|approvals|audit|alerts|podman|containers|diagnostics|groups|logs|cache|records|reset-failed|reboot> [args]")
 	}
 	switch args[0] {
 	case "validate-config":
@@ -82,9 +82,154 @@ func run(ctx context.Context, args []string) error {
 		return containers(ctx, args[1:])
 	case "diagnostics":
 		return diagnostics(ctx, args[1:])
+	case "groups", "logs", "cache", "records", "reset-failed", "reboot":
+		return maintenance(ctx, args)
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
+}
+
+func maintenance(ctx context.Context, args []string) error {
+	switch args[0] {
+	case "groups":
+		if len(args) < 3 || args[1] != "restart" {
+			return fmt.Errorf("usage: safeopsctl groups restart <group> [--dry-run] --config /etc/safeops/config.yaml")
+		}
+		fs := flag.NewFlagSet("groups restart", flag.ContinueOnError)
+		dryRun := fs.Bool("dry-run", false, "Simulate the operation.")
+		cfgPath := fs.String("config", "/etc/safeops/config.yaml", "Path to the SafeOps configuration file.")
+		if err := fs.Parse(args[3:]); err != nil {
+			return err
+		}
+		cfg, err := config.Load(*cfgPath)
+		if err != nil {
+			return err
+		}
+		out, err := executorClient(cfg).RestartGroup(ctx, ports.RestartGroupRequest{Group: args[2], OperationID: "safeopsctl", DryRun: *dryRun})
+		return printJSON(out, err)
+	case "logs":
+		if len(args) < 3 || args[1] != "rotate" {
+			return fmt.Errorf("usage: safeopsctl logs rotate <resource> [--dry-run] --config /etc/safeops/config.yaml")
+		}
+		fs := flag.NewFlagSet("logs rotate", flag.ContinueOnError)
+		dryRun := fs.Bool("dry-run", false, "Simulate the operation.")
+		cfgPath := fs.String("config", "/etc/safeops/config.yaml", "Path to the SafeOps configuration file.")
+		if err := fs.Parse(args[3:]); err != nil {
+			return err
+		}
+		cfg, err := config.Load(*cfgPath)
+		if err != nil {
+			return err
+		}
+		out, err := executorClient(cfg).RotateLogs(ctx, ports.RotateLogsRequest{Resource: args[2], OperationID: "safeopsctl", DryRun: *dryRun})
+		return printJSON(out, err)
+	case "cache":
+		if len(args) < 3 || args[1] != "cleanup" {
+			return fmt.Errorf("usage: safeopsctl cache cleanup <resource> [--dry-run] --config /etc/safeops/config.yaml")
+		}
+		fs := flag.NewFlagSet("cache cleanup", flag.ContinueOnError)
+		dryRun := fs.Bool("dry-run", false, "Simulate the operation.")
+		cfgPath := fs.String("config", "/etc/safeops/config.yaml", "Path to the SafeOps configuration file.")
+		if err := fs.Parse(args[3:]); err != nil {
+			return err
+		}
+		cfg, err := config.Load(*cfgPath)
+		if err != nil {
+			return err
+		}
+		out, err := executorClient(cfg).CleanupCache(ctx, ports.CleanupCacheRequest{Resource: args[2], OperationID: "safeopsctl", DryRun: *dryRun})
+		return printJSON(out, err)
+	case "records":
+		if len(args) < 2 || args[1] != "cleanup" {
+			return fmt.Errorf("usage: safeopsctl records cleanup [--max-age 2160h] [--min-records 1000] [--dry-run] --config /etc/safeops/config.yaml")
+		}
+		fs := flag.NewFlagSet("records cleanup", flag.ContinueOnError)
+		maxAgeRaw := fs.String("max-age", "", "Maximum record age as a Go duration.")
+		minRecords := fs.Int("min-records", 0, "Minimum records to keep.")
+		dryRun := fs.Bool("dry-run", false, "Simulate the operation.")
+		cfgPath := fs.String("config", "/etc/safeops/config.yaml", "Path to the SafeOps configuration file.")
+		if err := fs.Parse(args[2:]); err != nil {
+			return err
+		}
+		cfg, err := config.Load(*cfgPath)
+		if err != nil {
+			return err
+		}
+		maxAge := cfg.AuditRetention.Std()
+		if *maxAgeRaw != "" {
+			maxAge, err = parseCLIDuration(*maxAgeRaw)
+			if err != nil {
+				return err
+			}
+		}
+		keep := cfg.AuditMinRecords
+		if *minRecords > 0 {
+			keep = *minRecords
+		}
+		store, err := sqlitestore.Open(cfg.Database.Path)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = store.Close() }()
+		if err := store.Migrate(ctx); err != nil {
+			return err
+		}
+		out, err := store.PruneRecords(ctx, time.Now().Add(-maxAge), keep, *dryRun)
+		return printJSON(out, err)
+	case "reset-failed":
+		if len(args) < 2 {
+			return fmt.Errorf("usage: safeopsctl reset-failed <resource> [--dry-run] --config /etc/safeops/config.yaml")
+		}
+		fs := flag.NewFlagSet("reset-failed", flag.ContinueOnError)
+		dryRun := fs.Bool("dry-run", false, "Simulate the operation.")
+		cfgPath := fs.String("config", "/etc/safeops/config.yaml", "Path to the SafeOps configuration file.")
+		if err := fs.Parse(args[2:]); err != nil {
+			return err
+		}
+		cfg, err := config.Load(*cfgPath)
+		if err != nil {
+			return err
+		}
+		out, err := executorClient(cfg).ResetFailureState(ctx, ports.ResetFailureStateRequest{Resource: args[1], OperationID: "safeopsctl", DryRun: *dryRun})
+		return printJSON(out, err)
+	case "reboot":
+		fs := flag.NewFlagSet("reboot", flag.ContinueOnError)
+		delay := fs.String("delay", "5m", "Delay before reboot.")
+		dryRun := fs.Bool("dry-run", false, "Simulate the operation.")
+		cfgPath := fs.String("config", "/etc/safeops/config.yaml", "Path to the SafeOps configuration file.")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		cfg, err := config.Load(*cfgPath)
+		if err != nil {
+			return err
+		}
+		out, err := executorClient(cfg).RebootHost(ctx, ports.RebootHostRequest{Delay: *delay, OperationID: "safeopsctl", DryRun: *dryRun})
+		return printJSON(out, err)
+	default:
+		return fmt.Errorf("unknown maintenance command %q", args[0])
+	}
+}
+
+func printJSON(value any, err error) error {
+	if err != nil {
+		return err
+	}
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	return enc.Encode(value)
+}
+
+func parseCLIDuration(raw string) (time.Duration, error) {
+	raw = strings.TrimSpace(raw)
+	if strings.HasSuffix(raw, "d") {
+		hours, err := time.ParseDuration(strings.TrimSuffix(raw, "d") + "h")
+		if err != nil {
+			return 0, err
+		}
+		return hours * 24, nil
+	}
+	return time.ParseDuration(raw)
 }
 
 func alertCommand(ctx context.Context, args []string) error {

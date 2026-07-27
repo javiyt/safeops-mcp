@@ -97,6 +97,22 @@ func (c Client) Restart(ctx context.Context, name string) error {
 	return nil
 }
 
+func (c Client) Start(ctx context.Context, name string) error {
+	_, err := c.Runner.Run(ctx, c.Binary, "start", name)
+	if err != nil {
+		return errors.New(redaction.Redact(err.Error()))
+	}
+	return nil
+}
+
+func (c Client) Stop(ctx context.Context, name string) error {
+	_, err := c.Runner.Run(ctx, c.Binary, "stop", name)
+	if err != nil {
+		return errors.New(redaction.Redact(err.Error()))
+	}
+	return nil
+}
+
 func (c Client) WaitForRunning(ctx context.Context, alias, name, management string, attempts int, interval time.Duration) (ports.ContainerStatus, int, error) {
 	if attempts <= 0 {
 		attempts = 1

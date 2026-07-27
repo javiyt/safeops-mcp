@@ -67,3 +67,9 @@ Residual OpenClaw risk remains around operator mistakes in channel allowlists, f
 Residual Telegram risk remains around Telegram account compromise, endpoint availability, Bot API behavior changes, local process environment exposure, and operators choosing an OpenClaw command wrapper that logs user messages or token-bearing environment variables.
 
 Residual alert risk remains around Telegram delivery failures, host telemetry gaps, platform-specific temperature data, false positives from configured thresholds, and SQLite alert retention requiring future cleanup automation.
+
+Maintenance threats include accidental deletion of useful logs, malicious requests for arbitrary filesystem cleanup, cache cleanup outside application boundaries, denial of service through group restart, hiding activity by deleting audit history, and host reboot abuse. SafeOps mitigates these by requiring configured aliases, rejecting free paths and commands, using generic approvals for non-dry-run maintenance, auditing every request and confirmation, enforcing operation locks, applying log/cache size and time limits, keeping a minimum number of SafeOps records, and disabling host reboot by default.
+
+Log rotation and cache cleanup do not expose a shell. The executor resolves paths from configuration and uses separated filesystem operations for rename, compression, and deletion. Operators must ensure configured paths are dedicated application log or cache locations and are not broad directories such as `/`, `/var`, `/home`, or shared secret directories.
+
+Host reboot requires `host_reboot.enabled: true`, a longer confirmation code, no active mutable operation locks, and a restricted executor command. The recommended deployment uses sudoers to allow only the exact shutdown/reboot command needed by SafeOps without a password. Passwords must not be stored in SafeOps configuration.
