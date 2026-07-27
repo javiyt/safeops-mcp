@@ -22,6 +22,11 @@ filesystem:
   disk_paths:
     root:
       path: /
+podman:
+  enabled: true
+  binary: /usr/bin/podman
+  mode: rootless
+  systemd_scope: user
 services:
   service-alpha:
     unit: app-alpha.service
@@ -42,6 +47,37 @@ services:
       restart: confirm
   database-alpha:
     unit: database-alpha.service
+    permissions:
+      status: allow
+      logs: allow
+      restart: deny
+containers:
+  container-alpha:
+    container_name: app-alpha-container
+    management: podman
+    permissions:
+      status: allow
+      logs: allow
+      restart: confirm
+    logs:
+      max_lines: 200
+    health:
+      require_healthy_after_restart: true
+      attempts: 5
+      interval: 2s
+  workload-alpha:
+    container_name: worker-alpha-container
+    management: quadlet
+    quadlet_unit: worker-alpha.service
+    permissions:
+      status: allow
+      logs: allow
+      restart: confirm
+    health:
+      require_healthy_after_restart: false
+  container-gamma:
+    container_name: datastore-alpha-container
+    management: podman
     permissions:
       status: allow
       logs: allow

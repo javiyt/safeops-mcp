@@ -11,5 +11,13 @@ const (
 type Type string
 
 const (
-	TypeRestartService Type = "restart_service"
+	TypeRestartService   Type = "restart_service"
+	TypeRestartContainer Type = "restart_container"
+)
+
+type ResourceKind string
+
+const (
+	ResourceService   ResourceKind = "service"
+	ResourceContainer ResourceKind = "container"
 )

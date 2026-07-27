@@ -14,7 +14,15 @@ type Client struct {
 }
 
 func (c Client) Status(ctx context.Context, alias, unit string) (service.Status, error) {
-	res, err := c.Runner.Run(ctx, "/usr/bin/systemctl", "show", unit, "--property=ActiveState", "--property=SubState", "--property=ExecMainStartTimestamp", "--property=MainPID", "--value")
+	return c.StatusWithScope(ctx, alias, unit, "system")
+}
+
+func (c Client) StatusWithScope(ctx context.Context, alias, unit, scope string) (service.Status, error) {
+	args := []string{"show", unit, "--property=ActiveState", "--property=SubState", "--property=ExecMainStartTimestamp", "--property=MainPID", "--value"}
+	if scope == "user" {
+		args = append([]string{"--user"}, args...)
+	}
+	res, err := c.Runner.Run(ctx, "/usr/bin/systemctl", args...)
 	if err != nil {
 		return service.Status{}, err
 	}
@@ -38,5 +46,14 @@ func (c Client) Status(ctx context.Context, alias, unit string) (service.Status,
 
 func (c Client) Restart(ctx context.Context, unit string) error {
 	_, err := c.Runner.Run(ctx, "/usr/bin/systemctl", "restart", unit)
+	return err
+}
+
+func (c Client) RestartWithScope(ctx context.Context, unit, scope string) error {
+	args := []string{"restart", unit}
+	if scope == "user" {
+		args = append([]string{"--user"}, args...)
+	}
+	_, err := c.Runner.Run(ctx, "/usr/bin/systemctl", args...)
 	return err
 }

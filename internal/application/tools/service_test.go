@@ -195,6 +195,187 @@ func TestRequestRestartRejectsDeniedServiceAndGeneratorErrors(t *testing.T) {
 	}
 }
 
+func TestContainerToolsAndRestartApproval(t *testing.T) {
+	repo := newApprovalRepo()
+	svc := testService(repo, fakeAudit{}, fakeExecutor{})
+	svc.Config.Podman = config.PodmanConfig{Enabled: true, Binary: "/usr/bin/podman", Mode: "rootless", SystemdScope: "user"}
+	svc.Config.Containers = map[string]config.ContainerConfig{
+		"container-alpha": {
+			ContainerName: "app-alpha-container",
+			Management:    "podman",
+			Permissions:   config.PermissionsConfig{Status: "allow", Logs: "allow", Restart: "confirm"},
+			Logs:          config.ContainerLogsConfig{MaxLines: 10},
+			Health:        config.ContainerHealthConfig{Attempts: 2, Interval: config.Duration(time.Millisecond)},
+		},
+	}
+	if _, err := svc.ListContainers(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ContainerStatus(context.Background(), "container-alpha"); err != nil {
+		t.Fatal(err)
+	}
+	logs, err := svc.ContainerLogs(context.Background(), ports.ContainerLogsRequest{Container: "container-alpha", Lines: 1, Since: "2h"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !logs.UntrustedContent || logs.Entries[0].Message != "token=[REDACTED]" {
+		t.Fatalf("logs = %+v", logs)
+	}
+	if _, err := svc.ContainerLogs(context.Background(), ports.ContainerLogsRequest{Container: "container-alpha", Lines: 11}); err == nil {
+		t.Fatal("ContainerLogs() error = nil, want line limit error")
+	}
+	out, err := svc.RequestContainerRestart(context.Background(), "operator", RequestContainerRestartInput{Container: "container-alpha", Reason: "unhealthy"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, _ := repo.Get(context.Background(), out.ApprovalID)
+	if stored.Action != "restart_container" || stored.ResourceKind != "container" || stored.ResourceAlias != "container-alpha" {
+		t.Fatalf("stored approval = %+v", stored)
+	}
+	result, err := svc.ConfirmAction(context.Background(), "operator", ConfirmInput{ApprovalID: out.ApprovalID, ConfirmationCode: out.ConfirmationCode})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Action != "restart_container" || result.ContainerState != "running" {
+		t.Fatalf("result = %+v", result)
+	}
+}
+
+func TestPodmanDisabledRejectsContainerTools(t *testing.T) {
+	svc := testService(newApprovalRepo(), fakeAudit{}, fakeExecutor{})
+	if _, err := svc.ListContainers(context.Background()); err == nil {
+		t.Fatal("ListContainers() error = nil, want disabled error")
+	}
+	if _, err := svc.RequestContainerRestart(context.Background(), "operator", RequestContainerRestartInput{Container: "container-alpha", Reason: "unhealthy"}); err == nil {
+		t.Fatal("RequestContainerRestart() error = nil, want disabled error")
+	}
+}
+
+func TestApplicationErrorBranches(t *testing.T) {
+	svc := testService(newApprovalRepo(), fakeAudit{}, fakeExecutor{})
+	svc.Config.Podman = config.PodmanConfig{Enabled: true, Binary: "/usr/bin/podman", Mode: "rootless", SystemdScope: "user"}
+	svc.Config.Containers = map[string]config.ContainerConfig{
+		"denied": {
+			ContainerName: "denied",
+			Management:    "podman",
+			Permissions:   config.PermissionsConfig{Status: "deny", Logs: "deny", Restart: "deny"},
+		},
+		"container-alpha": {
+			ContainerName: "app-alpha-container",
+			Management:    "podman",
+			Permissions:   config.PermissionsConfig{Status: "allow", Logs: "allow", Restart: "confirm"},
+			Logs:          config.ContainerLogsConfig{MaxLines: 10},
+		},
+	}
+	if _, err := svc.ContainerStatus(context.Background(), "denied"); err == nil {
+		t.Fatal("ContainerStatus() error = nil, want denied error")
+	}
+	if _, err := svc.ContainerLogs(context.Background(), ports.ContainerLogsRequest{Container: "container-alpha", Lines: 1, Since: "forever"}); err == nil {
+		t.Fatal("ContainerLogs() error = nil, want since error")
+	}
+	if err := svc.CancelAction(context.Background(), "operator", "missing"); err == nil {
+		t.Fatal("CancelAction() error = nil, want missing error")
+	}
+}
+
+func TestRequestRestartRequiresAuditPersistence(t *testing.T) {
+	svc := testService(newApprovalRepo(), failingAudit{}, fakeExecutor{})
+	if _, err := svc.RequestServiceRestart(context.Background(), "operator", RequestRestartInput{Service: "service-alpha", Reason: "stopped"}); err == nil {
+		t.Fatal("RequestServiceRestart() error = nil, want audit error")
+	}
+}
+
+func TestConfirmRejectsUnsupportedAction(t *testing.T) {
+	repo := newApprovalRepo()
+	now := time.Date(2026, 7, 24, 10, 0, 0, 0, time.UTC)
+	normalized, err := normalizeAction("restart_host", "service", "service-alpha", "bad", "operator", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Create(context.Background(), approval.Approval{
+		ID:                   "apr_bad",
+		UserID:               "operator",
+		Tool:                 "request_service_restart",
+		Action:               "restart_host",
+		ResourceKind:         "service",
+		ResourceAlias:        "service-alpha",
+		NormalizedArguments:  string(normalized),
+		ArgumentsHash:        hashString(string(normalized)),
+		ConfirmationCodeHash: hashString("4821"),
+		Status:               approval.StatusPending,
+		CreatedAt:            now,
+		ExpiresAt:            now.Add(time.Minute),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	svc := testService(repo, fakeAudit{}, fakeExecutor{})
+	if _, err := svc.ConfirmAction(context.Background(), "operator", ConfirmInput{ApprovalID: "apr_bad", ConfirmationCode: "4821"}); err == nil {
+		t.Fatal("ConfirmAction() error = nil, want unsupported action error")
+	}
+}
+
+func TestConfirmRejectsTamperedApprovalArguments(t *testing.T) {
+	now := time.Date(2026, 7, 24, 10, 0, 0, 0, time.UTC)
+	repo := newApprovalRepo()
+	if err := repo.Create(context.Background(), approval.Approval{
+		ID:                   "apr_tampered",
+		UserID:               "operator",
+		Tool:                 "request_service_restart",
+		Action:               "restart_service",
+		ResourceKind:         "service",
+		ResourceAlias:        "service-alpha",
+		NormalizedArguments:  `{"reason":"changed"}`,
+		ArgumentsHash:        hashString(`{"reason":"original"}`),
+		ConfirmationCodeHash: hashString("4821"),
+		Status:               approval.StatusPending,
+		CreatedAt:            now,
+		ExpiresAt:            now.Add(time.Minute),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	svc := testService(repo, fakeAudit{}, fakeExecutor{})
+	if _, err := svc.ConfirmAction(context.Background(), "operator", ConfirmInput{ApprovalID: "apr_tampered", ConfirmationCode: "4821"}); err == nil {
+		t.Fatal("ConfirmAction() error = nil, want hash mismatch")
+	}
+
+	repo = newApprovalRepo()
+	if err := repo.Create(context.Background(), approval.Approval{
+		ID:                   "apr_bad_json",
+		UserID:               "operator",
+		Tool:                 "request_service_restart",
+		Action:               "restart_service",
+		NormalizedArguments:  `{`,
+		ArgumentsHash:        hashString(`{`),
+		ConfirmationCodeHash: hashString("4821"),
+		Status:               approval.StatusPending,
+		CreatedAt:            now,
+		ExpiresAt:            now.Add(time.Minute),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	svc = testService(repo, fakeAudit{}, fakeExecutor{})
+	if _, err := svc.ConfirmAction(context.Background(), "operator", ConfirmInput{ApprovalID: "apr_bad_json", ConfirmationCode: "4821"}); err == nil {
+		t.Fatal("ConfirmAction() error = nil, want bad JSON")
+	}
+}
+
+func TestConfirmRejectsConcurrentResourceLock(t *testing.T) {
+	repo := newApprovalRepo()
+	repo.locked = true
+	svc := testService(repo, fakeAudit{}, fakeExecutor{})
+	out, err := svc.RequestServiceRestart(context.Background(), "operator", RequestRestartInput{Service: "service-alpha", Reason: "stopped"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ConfirmAction(context.Background(), "operator", ConfirmInput{ApprovalID: out.ApprovalID, ConfirmationCode: out.ConfirmationCode}); err == nil {
+		t.Fatal("ConfirmAction() error = nil, want lock error")
+	}
+	stored, _ := repo.Get(context.Background(), out.ApprovalID)
+	if stored.Status != approval.StatusFailed {
+		t.Fatalf("status = %s, want failed", stored.Status)
+	}
+}
+
 func TestActionStatusRejectsWrongUser(t *testing.T) {
 	repo := newApprovalRepo()
 	svc := testService(repo, fakeAudit{}, fakeExecutor{})
@@ -262,8 +443,16 @@ type fakeAudit struct{}
 func (fakeAudit) Append(context.Context, audit.Event) error             { return nil }
 func (fakeAudit) ListAudit(context.Context, int) ([]audit.Event, error) { return nil, nil }
 
+type failingAudit struct{}
+
+func (failingAudit) Append(context.Context, audit.Event) error {
+	return errors.New("audit failed")
+}
+func (failingAudit) ListAudit(context.Context, int) ([]audit.Event, error) { return nil, nil }
+
 type approvalRepo struct {
-	items map[string]approval.Approval
+	items  map[string]approval.Approval
+	locked bool
 }
 
 func newApprovalRepo() *approvalRepo {
@@ -315,6 +504,17 @@ func (r *approvalRepo) Cancel(_ context.Context, id string, userID string, _ tim
 }
 
 func (r *approvalRepo) List(context.Context, int) ([]approval.Approval, error) { return nil, nil }
+func (r *approvalRepo) AcquireOperationLock(context.Context, string, string, string, time.Time) error {
+	if r.locked {
+		return errors.New("resource already has an executing operation")
+	}
+	r.locked = true
+	return nil
+}
+func (r *approvalRepo) ReleaseOperationLock(context.Context, string, string, string) error {
+	r.locked = false
+	return nil
+}
 
 type fakeExecutor struct {
 	restartErr error
@@ -338,4 +538,16 @@ func (e fakeExecutor) RestartService(context.Context, ports.RestartServiceReques
 		return ports.RestartServiceResponse{}, e.restartErr
 	}
 	return ports.RestartServiceResponse{Status: "executed", Action: "restart_service", Service: "service-alpha", ServiceStatus: "active"}, nil
+}
+func (fakeExecutor) ListContainers(context.Context) ([]ports.ContainerSummary, error) {
+	return nil, nil
+}
+func (fakeExecutor) ContainerStatus(context.Context, string) (ports.ContainerStatus, error) {
+	return ports.ContainerStatus{Alias: "container-alpha", State: "running", Health: "healthy"}, nil
+}
+func (fakeExecutor) ContainerLogs(context.Context, ports.ContainerLogsRequest) (ports.ContainerLogsResponse, error) {
+	return ports.ContainerLogsResponse{Entries: []ports.ContainerLogEntry{{Message: "token=abc"}}, UntrustedContent: true}, nil
+}
+func (fakeExecutor) RestartContainer(context.Context, ports.RestartContainerRequest) (ports.RestartContainerResponse, error) {
+	return ports.RestartContainerResponse{Status: "executed", Action: "restart_container", ResourceKind: "container", Resource: "container-alpha", ContainerState: "running", Health: ports.ContainerHealthResult{Configured: true, Status: "healthy", Attempts: 1}}, nil
 }

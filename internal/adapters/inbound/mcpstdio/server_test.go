@@ -136,6 +136,18 @@ func (fakeExecutor) ServiceLogs(context.Context, ports.ServiceLogsRequest) (port
 func (fakeExecutor) RestartService(context.Context, ports.RestartServiceRequest) (ports.RestartServiceResponse, error) {
 	return ports.RestartServiceResponse{Status: "executed", Service: "service-alpha"}, nil
 }
+func (fakeExecutor) ListContainers(context.Context) ([]ports.ContainerSummary, error) {
+	return []ports.ContainerSummary{{Alias: "container-alpha", Management: "podman", State: "running", Health: "healthy"}}, nil
+}
+func (fakeExecutor) ContainerStatus(context.Context, string) (ports.ContainerStatus, error) {
+	return ports.ContainerStatus{Alias: "container-alpha", State: "running", Health: "healthy"}, nil
+}
+func (fakeExecutor) ContainerLogs(context.Context, ports.ContainerLogsRequest) (ports.ContainerLogsResponse, error) {
+	return ports.ContainerLogsResponse{Container: "container-alpha", Entries: []ports.ContainerLogEntry{{Message: "ok"}}, UntrustedContent: true}, nil
+}
+func (fakeExecutor) RestartContainer(context.Context, ports.RestartContainerRequest) (ports.RestartContainerResponse, error) {
+	return ports.RestartContainerResponse{Status: "executed", Action: "restart_container", ResourceKind: "container", Resource: "container-alpha", ContainerState: "running"}, nil
+}
 
 type fakeClock struct {
 	now time.Time
@@ -198,6 +210,14 @@ func (r *fakeApprovals) Cancel(_ context.Context, id, _ string, _ time.Time) err
 
 func (r *fakeApprovals) List(context.Context, int) ([]approval.Approval, error) {
 	return nil, nil
+}
+
+func (r *fakeApprovals) AcquireOperationLock(context.Context, string, string, string, time.Time) error {
+	return nil
+}
+
+func (r *fakeApprovals) ReleaseOperationLock(context.Context, string, string, string) error {
+	return nil
 }
 
 type fakeAudit struct{}

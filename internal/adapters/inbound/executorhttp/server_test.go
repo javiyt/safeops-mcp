@@ -32,6 +32,10 @@ func TestHandlers(t *testing.T) {
 		{name: "status", method: http.MethodGet, target: "/v1/services/service-alpha/status", pathValues: map[string]string{"alias": "service-alpha"}, handler: s.handleServiceStatus},
 		{name: "logs", method: http.MethodPost, target: "/v1/services/logs", body: `{"service":"service-alpha"}`, handler: s.handleServiceLogs},
 		{name: "restart", method: http.MethodPost, target: "/v1/services/restart", body: `{"service":"service-alpha","operation_id":"op_1"}`, handler: s.handleRestartService},
+		{name: "containers", method: http.MethodGet, target: "/v1/containers", handler: s.handleListContainers},
+		{name: "container_status", method: http.MethodGet, target: "/v1/containers/container-alpha/status", pathValues: map[string]string{"alias": "container-alpha"}, handler: s.handleContainerStatus},
+		{name: "container_logs", method: http.MethodPost, target: "/v1/containers/logs", body: `{"container":"container-alpha","lines":1}`, handler: s.handleContainerLogs},
+		{name: "container_restart", method: http.MethodPost, target: "/v1/containers/restart", body: `{"container_alias":"container-alpha","operation_id":"op_1"}`, handler: s.handleRestartContainer},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -132,4 +136,16 @@ func (b fakeBackend) ServiceLogs(context.Context, ports.ServiceLogsRequest) (por
 }
 func (b fakeBackend) RestartService(context.Context, ports.RestartServiceRequest) (ports.RestartServiceResponse, error) {
 	return ports.RestartServiceResponse{Status: "executed", Service: "service-alpha"}, b.err
+}
+func (b fakeBackend) ListContainers(context.Context) ([]ports.ContainerSummary, error) {
+	return []ports.ContainerSummary{{Alias: "container-alpha", Management: "podman", State: "running", Health: "healthy"}}, b.err
+}
+func (b fakeBackend) ContainerStatus(context.Context, string) (ports.ContainerStatus, error) {
+	return ports.ContainerStatus{Alias: "container-alpha", State: "running", Health: "healthy"}, b.err
+}
+func (b fakeBackend) ContainerLogs(context.Context, ports.ContainerLogsRequest) (ports.ContainerLogsResponse, error) {
+	return ports.ContainerLogsResponse{Container: "container-alpha", UntrustedContent: true}, b.err
+}
+func (b fakeBackend) RestartContainer(context.Context, ports.RestartContainerRequest) (ports.RestartContainerResponse, error) {
+	return ports.RestartContainerResponse{Status: "executed", Action: "restart_container", ResourceKind: "container", Resource: "container-alpha"}, b.err
 }
