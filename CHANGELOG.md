@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.4.0
+
 - Added OpenClaw Phase 3 integration assets: locked-down MCP config, SafeOps agent prompt, optional installer, and E2E checklist.
 - Documented OpenClaw stdio MCP registration, tool policy, approval flow, agent prompt behavior, audit expectations, and final security checks.
 - Hardened MCP tool descriptions with configured-alias, untrusted-log, sensitive-field, and approval warnings.
