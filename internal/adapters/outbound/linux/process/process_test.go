@@ -19,6 +19,9 @@ func TestCommandRunnerRunsWithoutShell(t *testing.T) {
 	if out.Stdout != "abcd" {
 		t.Fatalf("stdout = %q", out.Stdout)
 	}
+	if !out.StdoutTruncated {
+		t.Fatal("StdoutTruncated = false, want true")
+	}
 }
 
 func TestCommandRunnerRejectsInvalidLimits(t *testing.T) {
@@ -44,6 +47,9 @@ func TestLimitedBufferBranches(t *testing.T) {
 	}
 	if b.String() != "abc" {
 		t.Fatalf("String() = %q", b.String())
+	}
+	if !b.Truncated() {
+		t.Fatal("Truncated() = false, want true")
 	}
 }
 

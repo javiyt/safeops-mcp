@@ -39,7 +39,9 @@ Podman container flow:
 2. The executor resolves each alias to a configured container name.
 3. The Podman adapter invokes `exec.CommandContext(ctx, podmanBinary, argument1, argument2, ...)` with closed argument lists.
 4. Status uses structured `podman inspect` JSON and maps native health to `healthy`, `unhealthy`, `starting`, `not_configured`, or `unknown`.
-5. Logs use bounded `podman logs` calls, closed `since` values, output limits, redaction, and untrusted-content marking.
+5. Logs use bounded `podman logs` calls, closed `since` values, per-container line limits, global byte limits, redaction, truncation reporting, and untrusted-content marking.
+
+Podman inspect is parsed into a narrow internal struct. Fields that commonly contain secrets or host topology, including environment variables, command arguments, labels, mounts, registry credentials, and generated Quadlet content, are not decoded into the response model.
 
 Quadlet workload flow:
 
@@ -48,8 +50,21 @@ Quadlet workload flow:
 3. Unit state comes from the configured Quadlet unit.
 4. Restart uses the configured systemd scope and unit. It does not call Podman restart for Quadlet workloads.
 
+For `systemd_scope: user`, systemd calls are made as `systemctl --user ...`. The executor must run as the same Linux user that owns the rootless containers and user units, with `XDG_RUNTIME_DIR` available. For `systemd_scope: system`, calls use system-scoped `systemctl ...` and require only the minimum host permission needed for the configured units.
+
 SafeOps never talks to the Podman REST socket. It does not expose a generic Podman runner, shell, or arbitrary argument field.
 
-Mutable operations are intended to be serialized by resource key `resource_kind + resource_alias`; the database schema includes a persistent lock table for cross-process ownership and recovery.
+Container restart flow:
+
+1. `request_container_restart` creates the same generic approval shape used by service restarts.
+2. `confirm_action` revalidates the user, approval state, confirmation code, policy, current permissions, current resource existence in configuration, dry-run state, action type, resource kind, resource alias, and normalized argument hash.
+3. A persistent operation lock is acquired for `resource_kind + resource_alias`.
+4. Plain Podman-managed containers use `podman restart <configured-container-name>`.
+5. Quadlet-managed workloads use `systemctl` with the configured scope and `quadlet_unit`.
+6. The executor waits for the container to become running. If no native Podman health check is configured, the health result is `not_configured` and no additional health polling is performed.
+7. If health is configured, SafeOps polls the native health state. `unhealthy` and stopped containers fail. `require_healthy_after_restart` controls whether unsettled health states fail the restart result.
+8. The operation result is persisted and audited; a post-operation audit write failure is recorded on the approval without hiding a successful restart.
+
+Mutable operations are serialized by resource key `resource_kind + resource_alias`; the SQLite schema includes a persistent lock table for cross-process ownership and recovery. Locks are released after success, failure, or cancellation of the executing context, and expired locks are cleaned before acquiring a new lock.
 
 Add a tool by defining a use case in `internal/application`, adding a closed executor operation if needed, exposing it in `internal/adapters/inbound/mcpstdio`, and testing validation at both boundaries.

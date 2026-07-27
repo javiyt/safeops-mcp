@@ -376,6 +376,49 @@ func TestConfirmRejectsConcurrentResourceLock(t *testing.T) {
 	}
 }
 
+func TestConfirmRevalidatesConfigurationBeforeExecution(t *testing.T) {
+	repo := newApprovalRepo()
+	executor := &recordingExecutor{}
+	svc := testService(repo, fakeAudit{}, executor)
+	out, err := svc.RequestServiceRestart(context.Background(), "operator", RequestRestartInput{Service: "service-alpha", Reason: "stopped"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := svc.Config.Services["service-alpha"]
+	cfg.Permissions.Restart = "deny"
+	svc.Config.Services["service-alpha"] = cfg
+	if _, err := svc.ConfirmAction(context.Background(), "operator", ConfirmInput{ApprovalID: out.ApprovalID, ConfirmationCode: out.ConfirmationCode}); err == nil {
+		t.Fatal("ConfirmAction() error = nil, want configuration revalidation error")
+	}
+	if executor.restartServiceCalls != 0 {
+		t.Fatalf("restartServiceCalls = %d, want 0", executor.restartServiceCalls)
+	}
+}
+
+func TestConfirmSuccessfulOperationSurvivesPostAuditFailure(t *testing.T) {
+	repo := newApprovalRepo()
+	audit := &failAfterAudit{failAfter: 1}
+	svc := testService(repo, audit, fakeExecutor{})
+	out, err := svc.RequestServiceRestart(context.Background(), "operator", RequestRestartInput{Service: "service-alpha", Reason: "stopped"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := svc.ConfirmAction(context.Background(), "operator", ConfirmInput{ApprovalID: out.ApprovalID, ConfirmationCode: out.ConfirmationCode})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "executed" {
+		t.Fatalf("result = %+v", result)
+	}
+	stored, err := repo.Get(context.Background(), out.ApprovalID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Status != approval.StatusExecuted || stored.ErrorSummary == "" {
+		t.Fatalf("stored approval = %+v", stored)
+	}
+}
+
 func TestActionStatusRejectsWrongUser(t *testing.T) {
 	repo := newApprovalRepo()
 	svc := testService(repo, fakeAudit{}, fakeExecutor{})
@@ -449,6 +492,21 @@ func (failingAudit) Append(context.Context, audit.Event) error {
 	return errors.New("audit failed")
 }
 func (failingAudit) ListAudit(context.Context, int) ([]audit.Event, error) { return nil, nil }
+
+type failAfterAudit struct {
+	calls     int
+	failAfter int
+}
+
+func (a *failAfterAudit) Append(context.Context, audit.Event) error {
+	a.calls++
+	if a.calls > a.failAfter {
+		return errors.New("audit failed")
+	}
+	return nil
+}
+
+func (a *failAfterAudit) ListAudit(context.Context, int) ([]audit.Event, error) { return nil, nil }
 
 type approvalRepo struct {
 	items  map[string]approval.Approval
@@ -550,4 +608,14 @@ func (fakeExecutor) ContainerLogs(context.Context, ports.ContainerLogsRequest) (
 }
 func (fakeExecutor) RestartContainer(context.Context, ports.RestartContainerRequest) (ports.RestartContainerResponse, error) {
 	return ports.RestartContainerResponse{Status: "executed", Action: "restart_container", ResourceKind: "container", Resource: "container-alpha", ContainerState: "running", Health: ports.ContainerHealthResult{Configured: true, Status: "healthy", Attempts: 1}}, nil
+}
+
+type recordingExecutor struct {
+	fakeExecutor
+	restartServiceCalls int
+}
+
+func (e *recordingExecutor) RestartService(ctx context.Context, req ports.RestartServiceRequest) (ports.RestartServiceResponse, error) {
+	e.restartServiceCalls++
+	return e.fakeExecutor.RestartService(ctx, req)
 }

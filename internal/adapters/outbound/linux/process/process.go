@@ -13,9 +13,11 @@ type Runner interface {
 }
 
 type Result struct {
-	Stdout   string
-	Stderr   string
-	Duration time.Duration
+	Stdout          string
+	Stderr          string
+	StdoutTruncated bool
+	StderrTruncated bool
+	Duration        time.Duration
 }
 
 type CommandRunner struct {
@@ -40,7 +42,13 @@ func (r CommandRunner) Run(ctx context.Context, path string, args ...string) (Re
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	err := cmd.Run()
-	result := Result{Stdout: stdout.String(), Stderr: stderr.String(), Duration: time.Since(start)}
+	result := Result{
+		Stdout:          stdout.String(),
+		Stderr:          stderr.String(),
+		StdoutTruncated: stdout.Truncated(),
+		StderrTruncated: stderr.Truncated(),
+		Duration:        time.Since(start),
+	}
 	if runCtx.Err() != nil {
 		return result, fmt.Errorf("%s timed out: %w", path, runCtx.Err())
 	}
@@ -51,17 +59,20 @@ func (r CommandRunner) Run(ctx context.Context, path string, args ...string) (Re
 }
 
 type limitedBuffer struct {
-	buf   []byte
-	limit int
+	buf       []byte
+	limit     int
+	truncated bool
 }
 
 func (b *limitedBuffer) Write(p []byte) (int, error) {
 	remaining := b.limit - len(b.buf)
 	if remaining <= 0 {
+		b.truncated = true
 		return len(p), nil
 	}
 	if len(p) > remaining {
 		b.buf = append(b.buf, p[:remaining]...)
+		b.truncated = true
 		return len(p), nil
 	}
 	b.buf = append(b.buf, p...)
@@ -70,4 +81,8 @@ func (b *limitedBuffer) Write(p []byte) (int, error) {
 
 func (b *limitedBuffer) String() string {
 	return string(b.buf)
+}
+
+func (b *limitedBuffer) Truncated() bool {
+	return b.truncated
 }

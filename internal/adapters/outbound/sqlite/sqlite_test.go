@@ -2,6 +2,8 @@ package sqlite
 
 import (
 	"context"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -153,6 +155,47 @@ func TestOperationLocks(t *testing.T) {
 	if err := store.AcquireOperationLock(ctx, "container", "container-alpha", "op_3", time.Now().Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestOperationLocksRejectConcurrentMutableActions(t *testing.T) {
+	store := migratedStore(t)
+	ctx := context.Background()
+	var acquired int32
+	var conflicted int32
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func(operationID string) {
+			defer wg.Done()
+			<-start
+			err := store.AcquireOperationLock(ctx, "container", "container-alpha", operationID, time.Now().Add(time.Minute))
+			if err != nil {
+				atomic.AddInt32(&conflicted, 1)
+				return
+			}
+			atomic.AddInt32(&acquired, 1)
+			time.Sleep(10 * time.Millisecond)
+			if err := store.ReleaseOperationLock(ctx, "container", "container-alpha", operationID); err != nil {
+				t.Errorf("ReleaseOperationLock() error = %v", err)
+			}
+		}(approvalIDForIndex(i))
+	}
+	close(start)
+	wg.Wait()
+	if acquired != 1 || conflicted != 1 {
+		t.Fatalf("acquired=%d conflicted=%d, want 1/1", acquired, conflicted)
+	}
+	if err := store.AcquireOperationLock(ctx, "container", "container-alpha", "op_after", time.Now().Add(time.Minute)); err != nil {
+		t.Fatalf("lock was not released after operation: %v", err)
+	}
+}
+
+func approvalIDForIndex(i int) string {
+	if i == 0 {
+		return "op_1"
+	}
+	return "op_2"
 }
 
 func migratedStore(t *testing.T) *Store {

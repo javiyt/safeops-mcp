@@ -15,6 +15,8 @@ When Podman is enabled, OpenClaw still does not need direct container privileges
 - Quadlet files.
 - Container storage directories.
 
+Podman, `systemctl`, and Quadlet access belong only to `safeops-executor`. OpenClaw should see the typed SafeOps MCP tools and the restricted Unix socket path only through `safeops-mcp`; it does not need host binaries or container runtime credentials.
+
 Additional tools may be advertised:
 
 - `list_containers`: lists configured container aliases only.

@@ -18,6 +18,8 @@ Validate configuration with:
 safeopsctl validate-config --config /etc/safeops/config.yaml
 ```
 
+When Podman is enabled, validation requires `podman.binary` to be an absolute path to an existing file. Validate from the same host image or Raspberry Pi environment where the executor will run.
+
 Install `deploy/systemd/safeops-executor.service` as a starting point and review hardening options for the target distribution.
 
 For service restarts, choose one host privilege model:
@@ -58,7 +60,9 @@ safeopsctl containers list --config /etc/safeops/config.yaml
 safeopsctl containers status container-alpha --config /etc/safeops/config.yaml
 ```
 
-`XDG_RUNTIME_DIR` normally points to `/run/user/<uid>` for the logged-in user and is required for `systemctl --user` and rootless Podman integration. If the executor runs when the user is not logged in, enable linger for that user:
+`safeopsctl podman check` verifies the configured Podman binary, mode, configured container visibility, user-scoped systemd access when configured, `XDG_RUNTIME_DIR`, and linger when `loginctl` is available. It prints status metadata only; it must not print container environment variables, command arguments, mounts, or secrets from inspect output.
+
+`XDG_RUNTIME_DIR` normally points to `/run/user/<uid>` for the logged-in user and is required for `systemctl --user` and rootless Podman integration. SafeOps diagnostics report whether it is set, but do not print the path. If the executor runs when the user is not logged in, enable linger for that user:
 
 ```sh
 loginctl enable-linger safeops-executor

@@ -266,9 +266,19 @@ func (b ExecutorBackend) RestartContainer(ctx context.Context, req ports.Restart
 	if err != nil {
 		return ports.RestartContainerResponse{}, err
 	}
+	if st.Health == "not_configured" {
+		return ports.RestartContainerResponse{
+			Status:         "executed",
+			Action:         "restart_container",
+			ResourceKind:   "container",
+			Resource:       req.ContainerAlias,
+			ContainerState: st.State,
+			Health:         ports.ContainerHealthResult{Configured: false, Status: "not_configured", Attempts: runningAttempts},
+		}, nil
+	}
 	healthStatus, healthAttempts, err := b.Podman.WaitForHealth(ctx, req.ContainerAlias, ctr.ContainerName, ctr.Management, attempts, interval)
 	configured := healthStatus != "not_configured"
-	if err != nil && (ctr.Health.RequireHealthyAfterRestart || healthStatus != "not_configured") {
+	if err != nil && (ctr.Health.RequireHealthyAfterRestart || healthStatus == "unhealthy") {
 		return ports.RestartContainerResponse{}, err
 	}
 	return ports.RestartContainerResponse{
