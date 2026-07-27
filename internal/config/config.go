@@ -15,17 +15,18 @@ import (
 )
 
 type Config struct {
-	Server     ServerConfig               `yaml:"server"`
-	Identity   IdentityConfig             `yaml:"identity"`
-	Database   DatabaseConfig             `yaml:"database"`
-	Socket     SocketConfig               `yaml:"socket"`
-	Policies   PoliciesConfig             `yaml:"policies"`
-	Limits     LimitsConfig               `yaml:"limits"`
-	Filesystem FilesystemConfig           `yaml:"filesystem"`
-	Telegram   TelegramConfig             `yaml:"telegram"`
-	Services   map[string]ServiceConfig   `yaml:"services"`
-	Podman     PodmanConfig               `yaml:"podman"`
-	Containers map[string]ContainerConfig `yaml:"containers"`
+	Server      ServerConfig               `yaml:"server"`
+	Identity    IdentityConfig             `yaml:"identity"`
+	Database    DatabaseConfig             `yaml:"database"`
+	Socket      SocketConfig               `yaml:"socket"`
+	Policies    PoliciesConfig             `yaml:"policies"`
+	Limits      LimitsConfig               `yaml:"limits"`
+	Filesystem  FilesystemConfig           `yaml:"filesystem"`
+	Diagnostics DiagnosticsConfig          `yaml:"diagnostics"`
+	Telegram    TelegramConfig             `yaml:"telegram"`
+	Services    map[string]ServiceConfig   `yaml:"services"`
+	Podman      PodmanConfig               `yaml:"podman"`
+	Containers  map[string]ContainerConfig `yaml:"containers"`
 }
 
 type ServerConfig struct {
@@ -62,6 +63,47 @@ type LimitsConfig struct {
 
 type FilesystemConfig struct {
 	DiskPaths map[string]DiskPathConfig `yaml:"disk_paths"`
+}
+
+type DiagnosticsConfig struct {
+	CPU     DiagnosticsCPUConfig     `yaml:"cpu"`
+	Memory  DiagnosticsMemoryConfig  `yaml:"memory"`
+	Disk    DiagnosticsDiskConfig    `yaml:"disk"`
+	Network DiagnosticsNetworkConfig `yaml:"network"`
+	Time    DiagnosticsTimeConfig    `yaml:"time"`
+}
+
+type DiagnosticsCPUConfig struct {
+	LoadWarning         float64 `yaml:"load_warning"`
+	LoadCritical        float64 `yaml:"load_critical"`
+	TemperatureWarning  float64 `yaml:"temperature_warning"`
+	TemperatureCritical float64 `yaml:"temperature_critical"`
+}
+
+type DiagnosticsMemoryConfig struct {
+	AvailableWarningPercent  float64 `yaml:"available_warning_percent"`
+	AvailableCriticalPercent float64 `yaml:"available_critical_percent"`
+	SwapWarning              float64 `yaml:"swap_warning"`
+	OOMCheck                 bool    `yaml:"oom_check"`
+}
+
+type DiagnosticsDiskConfig struct {
+	UsageWarning  float64 `yaml:"usage_warning"`
+	UsageCritical float64 `yaml:"usage_critical"`
+	InodeWarning  float64 `yaml:"inode_warning"`
+	InodeCritical float64 `yaml:"inode_critical"`
+	SMARTCheck    bool    `yaml:"smart_check"`
+}
+
+type DiagnosticsNetworkConfig struct {
+	PingTargets    []string `yaml:"ping_targets"`
+	LatencyWarning Duration `yaml:"latency_warning"`
+	RedactIPs      bool     `yaml:"redact_ips"`
+}
+
+type DiagnosticsTimeConfig struct {
+	NTPCheck     bool     `yaml:"ntp_check"`
+	DriftWarning Duration `yaml:"drift_warning"`
 }
 
 type DiskPathConfig struct {
@@ -178,10 +220,54 @@ func Load(path string) (Config, error) {
 	if err := decoder.Decode(&cfg); err != nil {
 		return Config{}, err
 	}
+	cfg.ApplyDefaults()
 	return cfg, Validate(cfg)
 }
 
+func (cfg *Config) ApplyDefaults() {
+	if cfg.Diagnostics.CPU.LoadWarning == 0 {
+		cfg.Diagnostics.CPU.LoadWarning = 2.0
+	}
+	if cfg.Diagnostics.CPU.LoadCritical == 0 {
+		cfg.Diagnostics.CPU.LoadCritical = 4.0
+	}
+	if cfg.Diagnostics.CPU.TemperatureWarning == 0 {
+		cfg.Diagnostics.CPU.TemperatureWarning = 70
+	}
+	if cfg.Diagnostics.CPU.TemperatureCritical == 0 {
+		cfg.Diagnostics.CPU.TemperatureCritical = 80
+	}
+	if cfg.Diagnostics.Memory.AvailableWarningPercent == 0 {
+		cfg.Diagnostics.Memory.AvailableWarningPercent = 15
+	}
+	if cfg.Diagnostics.Memory.AvailableCriticalPercent == 0 {
+		cfg.Diagnostics.Memory.AvailableCriticalPercent = 5
+	}
+	if cfg.Diagnostics.Memory.SwapWarning == 0 {
+		cfg.Diagnostics.Memory.SwapWarning = 50
+	}
+	if cfg.Diagnostics.Disk.UsageWarning == 0 {
+		cfg.Diagnostics.Disk.UsageWarning = 80
+	}
+	if cfg.Diagnostics.Disk.UsageCritical == 0 {
+		cfg.Diagnostics.Disk.UsageCritical = 90
+	}
+	if cfg.Diagnostics.Disk.InodeWarning == 0 {
+		cfg.Diagnostics.Disk.InodeWarning = 80
+	}
+	if cfg.Diagnostics.Disk.InodeCritical == 0 {
+		cfg.Diagnostics.Disk.InodeCritical = 90
+	}
+	if cfg.Diagnostics.Network.LatencyWarning.Std() == 0 {
+		cfg.Diagnostics.Network.LatencyWarning = Duration(100 * time.Millisecond)
+	}
+	if cfg.Diagnostics.Time.DriftWarning.Std() == 0 {
+		cfg.Diagnostics.Time.DriftWarning = Duration(time.Second)
+	}
+}
+
 func Validate(cfg Config) error {
+	cfg.ApplyDefaults()
 	var errs []error
 	if strings.TrimSpace(cfg.Server.Name) == "" {
 		errs = append(errs, errors.New("server.name is required"))
@@ -230,6 +316,7 @@ func Validate(cfg Config) error {
 			errs = append(errs, fmt.Errorf("filesystem.disk_paths[%q].path must be absolute", alias))
 		}
 	}
+	validateDiagnostics(&errs, cfg)
 	for alias := range cfg.Services {
 		if _, ok := cfg.Containers[alias]; ok {
 			errs = append(errs, fmt.Errorf("alias %q is ambiguous between services and containers", alias))
@@ -252,6 +339,35 @@ func Validate(cfg Config) error {
 	validateTelegram(&errs, cfg)
 	validatePodman(&errs, cfg)
 	return errors.Join(errs...)
+}
+
+func validateDiagnostics(errs *[]error, cfg Config) {
+	validateIncreasingThreshold(errs, "diagnostics.cpu.load", cfg.Diagnostics.CPU.LoadWarning, cfg.Diagnostics.CPU.LoadCritical)
+	validateIncreasingThreshold(errs, "diagnostics.cpu.temperature", cfg.Diagnostics.CPU.TemperatureWarning, cfg.Diagnostics.CPU.TemperatureCritical)
+	validateIncreasingThreshold(errs, "diagnostics.memory.available", cfg.Diagnostics.Memory.AvailableCriticalPercent, cfg.Diagnostics.Memory.AvailableWarningPercent)
+	validateIncreasingThreshold(errs, "diagnostics.disk.usage", cfg.Diagnostics.Disk.UsageWarning, cfg.Diagnostics.Disk.UsageCritical)
+	validateIncreasingThreshold(errs, "diagnostics.disk.inode", cfg.Diagnostics.Disk.InodeWarning, cfg.Diagnostics.Disk.InodeCritical)
+	for _, target := range cfg.Diagnostics.Network.PingTargets {
+		if strings.TrimSpace(target) == "" || strings.ContainsAny(target, " \t\r\n") {
+			*errs = append(*errs, fmt.Errorf("diagnostics.network.ping_targets contains an invalid target"))
+		}
+	}
+	if cfg.Diagnostics.Network.LatencyWarning.Std() < 0 {
+		*errs = append(*errs, errors.New("diagnostics.network.latency_warning must not be negative"))
+	}
+	if cfg.Diagnostics.Time.DriftWarning.Std() < 0 {
+		*errs = append(*errs, errors.New("diagnostics.time.drift_warning must not be negative"))
+	}
+}
+
+func validateIncreasingThreshold(errs *[]error, name string, warning, critical float64) {
+	if warning <= 0 || critical <= 0 {
+		*errs = append(*errs, fmt.Errorf("%s thresholds must be positive", name))
+		return
+	}
+	if warning > critical {
+		*errs = append(*errs, fmt.Errorf("%s warning threshold must not exceed critical threshold", name))
+	}
 }
 
 func (cfg Config) TelegramToken() string {

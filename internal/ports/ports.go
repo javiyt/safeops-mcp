@@ -40,6 +40,13 @@ type AuditRepository interface {
 type ExecutorClient interface {
 	SystemStatus(ctx context.Context) (SystemStatus, error)
 	DiskStatus(ctx context.Context, alias string) (DiskStatus, error)
+	CPUStatus(ctx context.Context) (CPUStatus, error)
+	MemoryStatus(ctx context.Context) (MemoryStatus, error)
+	DiskHealth(ctx context.Context, alias string) (DiskHealth, error)
+	NetworkStatus(ctx context.Context) (NetworkStatus, error)
+	TimeStatus(ctx context.Context) (TimeStatus, error)
+	ConfiguredProcessStatus(ctx context.Context) (ConfiguredProcessStatus, error)
+	HostHealthSummary(ctx context.Context) (HostHealthSummary, error)
 	ListServices(ctx context.Context) ([]ServiceSummary, error)
 	ServiceStatus(ctx context.Context, alias string) (service.Status, error)
 	ServiceLogs(ctx context.Context, req ServiceLogsRequest) (ServiceLogsResponse, error)
@@ -53,6 +60,13 @@ type ExecutorClient interface {
 type ExecutorServer interface {
 	SystemStatus(ctx context.Context) (SystemStatus, error)
 	DiskStatus(ctx context.Context, alias string) (DiskStatus, error)
+	CPUStatus(ctx context.Context) (CPUStatus, error)
+	MemoryStatus(ctx context.Context) (MemoryStatus, error)
+	DiskHealth(ctx context.Context, alias string) (DiskHealth, error)
+	NetworkStatus(ctx context.Context) (NetworkStatus, error)
+	TimeStatus(ctx context.Context) (TimeStatus, error)
+	ConfiguredProcessStatus(ctx context.Context) (ConfiguredProcessStatus, error)
+	HostHealthSummary(ctx context.Context) (HostHealthSummary, error)
 	ListServices(ctx context.Context) ([]ServiceSummary, error)
 	ServiceStatus(ctx context.Context, alias string) (service.Status, error)
 	ServiceLogs(ctx context.Context, req ServiceLogsRequest) (ServiceLogsResponse, error)
@@ -97,6 +111,126 @@ type DiskStatus struct {
 	UsedBytes      uint64  `json:"used_bytes"`
 	AvailableBytes uint64  `json:"available_bytes"`
 	UsedPercent    float64 `json:"used_percent"`
+}
+
+type CPUStatus struct {
+	UsagePercent float64        `json:"usage_percent"`
+	Cores        []CoreUsage    `json:"cores"`
+	LoadAverage  []float64      `json:"load_average"`
+	Processes    []ProcessUsage `json:"processes"`
+	FrequencyMHz uint64         `json:"frequency"`
+	Throttling   Throttling     `json:"throttling"`
+	Temperature  *float64       `json:"temperature,omitempty"`
+}
+
+type CoreUsage struct {
+	Core  int     `json:"core"`
+	Usage float64 `json:"usage"`
+}
+
+type ProcessUsage struct {
+	PID     int     `json:"pid"`
+	Name    string  `json:"name"`
+	CPU     float64 `json:"cpu"`
+	Memory  float64 `json:"memory"`
+	Command string  `json:"command,omitempty"`
+	Alias   string  `json:"alias,omitempty"`
+	Status  string  `json:"status,omitempty"`
+}
+
+type Throttling struct {
+	FrequencyCapped bool `json:"frequency_capped"`
+	Throttled       bool `json:"throttled"`
+}
+
+type MemoryStatus struct {
+	TotalMB        uint64     `json:"total_mb"`
+	AvailableMB    uint64     `json:"available_mb"`
+	UsedMB         uint64     `json:"used_mb"`
+	CacheMB        uint64     `json:"cache_mb"`
+	SwapTotalMB    uint64     `json:"swap_total_mb"`
+	SwapUsedMB     uint64     `json:"swap_used_mb"`
+	MemoryPressure float64    `json:"memory_pressure"`
+	OOMEvents      []OOMEvent `json:"oom_events"`
+}
+
+type OOMEvent struct {
+	Timestamp string `json:"timestamp"`
+	Process   string `json:"process"`
+	Killed    bool   `json:"killed"`
+}
+
+type DiskHealth struct {
+	Disks []DiskHealthItem `json:"disks"`
+}
+
+type DiskHealthItem struct {
+	Name             string      `json:"name"`
+	Mount            string      `json:"mount"`
+	TotalGB          float64     `json:"total_gb"`
+	UsedGB           float64     `json:"used_gb"`
+	AvailableGB      float64     `json:"available_gb"`
+	UsagePercent     float64     `json:"usage_percent"`
+	InodesTotal      uint64      `json:"inodes_total"`
+	InodesUsed       uint64      `json:"inodes_used"`
+	InodesPercent    float64     `json:"inodes_percent"`
+	Trend            string      `json:"trend"`
+	FilesystemErrors bool        `json:"filesystem_errors"`
+	SMART            SMARTStatus `json:"smart"`
+}
+
+type SMARTStatus struct {
+	Available          bool     `json:"available"`
+	Status             string   `json:"status,omitempty"`
+	Temperature        *float64 `json:"temperature,omitempty"`
+	ReallocatedSectors *uint64  `json:"reallocated_sectors,omitempty"`
+}
+
+type NetworkStatus struct {
+	Interfaces   []NetworkInterface   `json:"interfaces"`
+	Connectivity []ConnectivityResult `json:"connectivity"`
+}
+
+type NetworkInterface struct {
+	Name    string   `json:"name"`
+	State   string   `json:"state"`
+	IP      string   `json:"ip,omitempty"`
+	Gateway string   `json:"gateway,omitempty"`
+	DNS     []string `json:"dns,omitempty"`
+	Errors  uint64   `json:"errors"`
+	Dropped uint64   `json:"dropped"`
+}
+
+type ConnectivityResult struct {
+	Target    string   `json:"target"`
+	Reachable bool     `json:"reachable"`
+	LatencyMS *float64 `json:"latency_ms,omitempty"`
+}
+
+type TimeStatus struct {
+	CurrentTime     string   `json:"current_time"`
+	Timezone        string   `json:"timezone"`
+	NTPSynchronized bool     `json:"ntp_synchronized"`
+	NTPServer       string   `json:"ntp_server,omitempty"`
+	DriftSeconds    *float64 `json:"drift_seconds,omitempty"`
+	ServiceStatus   string   `json:"service_status"`
+}
+
+type ConfiguredProcessStatus struct {
+	Processes []ProcessUsage `json:"processes"`
+}
+
+type HostHealthSummary struct {
+	Status    string          `json:"status"`
+	Findings  []HealthFinding `json:"findings"`
+	Timestamp string          `json:"timestamp"`
+}
+
+type HealthFinding struct {
+	Severity string `json:"severity"`
+	Code     string `json:"code"`
+	Message  string `json:"message"`
+	Resource string `json:"resource,omitempty"`
 }
 
 type ServiceSummary struct {

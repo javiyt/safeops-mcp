@@ -18,6 +18,58 @@ Validate configuration with:
 safeopsctl validate-config --config /etc/safeops/config.yaml
 ```
 
+## Host Diagnostics
+
+SafeOps includes read-only diagnostics for administrator checks and OpenClaw-backed conversations:
+
+```sh
+safeopsctl diagnostics cpu --config /etc/safeops/config.yaml
+safeopsctl diagnostics memory --config /etc/safeops/config.yaml
+safeopsctl diagnostics disk --config /etc/safeops/config.yaml
+safeopsctl diagnostics disk root --config /etc/safeops/config.yaml
+safeopsctl diagnostics network --config /etc/safeops/config.yaml
+safeopsctl diagnostics time --config /etc/safeops/config.yaml
+safeopsctl diagnostics processes --config /etc/safeops/config.yaml
+safeopsctl diagnostics health-summary --config /etc/safeops/config.yaml
+```
+
+Add `--json` to any diagnostic command for structured output.
+
+The health summary status is:
+
+- `healthy`: no warning or critical findings.
+- `degraded`: at least one warning finding and no critical finding.
+- `critical`: at least one critical finding.
+
+Tune thresholds in `/etc/safeops/config.yaml`:
+
+```yaml
+diagnostics:
+  cpu:
+    load_warning: 2.0
+    load_critical: 4.0
+    temperature_warning: 70
+    temperature_critical: 80
+  memory:
+    available_warning_percent: 15
+    available_critical_percent: 5
+    swap_warning: 50
+  disk:
+    usage_warning: 80
+    usage_critical: 90
+    inode_warning: 80
+    inode_critical: 90
+  network:
+    ping_targets: ["8.8.8.8", "1.1.1.1"]
+    latency_warning: 100ms
+    redact_ips: false
+  time:
+    ntp_check: true
+    drift_warning: 1s
+```
+
+Disk diagnostics are limited to `filesystem.disk_paths`. Process diagnostics are limited to configured service and container aliases. Network connectivity checks use only configured targets and do not scan local networks or arbitrary ports.
+
 When Podman is enabled, validation requires `podman.binary` to be an absolute path to an existing file. Validate from the same host image or Raspberry Pi environment where the executor will run.
 
 Install `deploy/systemd/safeops-executor.service` as a starting point and review hardening options for the target distribution.

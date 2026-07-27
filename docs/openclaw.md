@@ -73,6 +73,13 @@ The important MCP server block is:
         "toolFilter": {
           "include": [
             "system_status",
+            "cpu_status",
+            "memory_status",
+            "disk_health",
+            "network_status",
+            "time_status",
+            "configured_process_status",
+            "host_health_summary",
             "disk_status",
             "list_services",
             "service_status",
@@ -106,6 +113,13 @@ sudo -u openclaw openclaw mcp probe safeops
 The expected tool list is:
 
 - `system_status`
+- `cpu_status`
+- `memory_status`
+- `disk_health`
+- `network_status`
+- `time_status`
+- `configured_process_status`
+- `host_health_summary`
 - `disk_status`
 - `list_services`
 - `service_status`

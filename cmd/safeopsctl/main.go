@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -10,10 +11,18 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/javiyt/safeops-mcp/internal/adapters/outbound/linux/configuredprocess"
+	cpuadapter "github.com/javiyt/safeops-mcp/internal/adapters/outbound/linux/cpu"
+	"github.com/javiyt/safeops-mcp/internal/adapters/outbound/linux/diskhealth"
+	"github.com/javiyt/safeops-mcp/internal/adapters/outbound/linux/memory"
+	"github.com/javiyt/safeops-mcp/internal/adapters/outbound/linux/network"
 	podmanadapter "github.com/javiyt/safeops-mcp/internal/adapters/outbound/linux/podman"
 	"github.com/javiyt/safeops-mcp/internal/adapters/outbound/linux/process"
+	"github.com/javiyt/safeops-mcp/internal/adapters/outbound/linux/timestatus"
 	sqlitestore "github.com/javiyt/safeops-mcp/internal/adapters/outbound/sqlite"
+	"github.com/javiyt/safeops-mcp/internal/bootstrap"
 	"github.com/javiyt/safeops-mcp/internal/config"
+	"github.com/javiyt/safeops-mcp/internal/ports"
 	"github.com/javiyt/safeops-mcp/internal/redaction"
 )
 
@@ -33,7 +42,7 @@ func main() {
 
 func run(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: safeopsctl <validate-config|migrate|approvals|audit|podman|containers> [args]")
+		return fmt.Errorf("usage: safeopsctl <validate-config|migrate|approvals|audit|podman|containers|diagnostics> [args]")
 	}
 	switch args[0] {
 	case "validate-config":
@@ -65,9 +74,107 @@ func run(ctx context.Context, args []string) error {
 		return podman(ctx, args[1:])
 	case "containers":
 		return containers(ctx, args[1:])
+	case "diagnostics":
+		return diagnostics(ctx, args[1:])
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
+}
+
+func diagnostics(ctx context.Context, args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: safeopsctl diagnostics <cpu|memory|disk|network|time|processes|health-summary> [disk-alias] [--json] --config /etc/safeops/config.yaml")
+	}
+	sub := args[0]
+	configArgs := args[1:]
+	diskAlias := ""
+	if sub == "disk" && len(args) > 1 && !strings.HasPrefix(args[1], "-") {
+		diskAlias = args[1]
+		configArgs = args[2:]
+	}
+	fs := flag.NewFlagSet("diagnostics "+sub, flag.ContinueOnError)
+	jsonOut := fs.Bool("json", false, "Print JSON output.")
+	cfgPath := fs.String("config", "/etc/safeops/config.yaml", "Path to the SafeOps configuration file.")
+	if err := fs.Parse(configArgs); err != nil {
+		return err
+	}
+	cfg, err := config.Load(*cfgPath)
+	if err != nil {
+		return err
+	}
+	runner := process.CommandRunner{Timeout: cfg.Limits.OperationTimeout.Std(), MaxBytes: cfg.Limits.MaxToolOutputBytes}
+	cpuReader := cpuadapter.Reader{Config: cfg}
+	backend := bootstrap.ExecutorBackend{
+		Config:      cfg,
+		CPU:         cpuReader,
+		Memory:      memory.Reader{Config: cfg},
+		DiskHealthR: diskhealth.Reader{Config: cfg},
+		Network:     network.Reader{Config: cfg, Runner: runner},
+		Time:        timestatus.Reader{Config: cfg, Runner: runner},
+		Processes:   configuredprocess.Reader{CPU: cpuReader},
+	}
+	var out any
+	switch sub {
+	case "cpu":
+		out, err = backend.CPUStatus(ctx)
+	case "memory":
+		out, err = backend.MemoryStatus(ctx)
+	case "disk":
+		out, err = backend.DiskHealth(ctx, diskAlias)
+	case "network":
+		out, err = backend.NetworkStatus(ctx)
+	case "time":
+		out, err = backend.TimeStatus(ctx)
+	case "processes":
+		out, err = backend.ConfiguredProcessStatus(ctx)
+	case "health-summary":
+		out, err = backend.HostHealthSummary(ctx)
+	default:
+		return fmt.Errorf("unknown diagnostics command %q", sub)
+	}
+	if err != nil {
+		return err
+	}
+	if *jsonOut {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(out)
+	}
+	return printDiagnostic(sub, out)
+}
+
+func printDiagnostic(sub string, out any) error {
+	switch v := out.(type) {
+	case ports.CPUStatus:
+		fmt.Printf("usage_percent\t%.1f\nload_average\t%v\nfrequency_mhz\t%d\n", v.UsagePercent, v.LoadAverage, v.FrequencyMHz)
+	case ports.MemoryStatus:
+		fmt.Printf("total_mb\t%d\navailable_mb\t%d\nused_mb\t%d\nswap_used_mb\t%d\npressure\t%.2f\n", v.TotalMB, v.AvailableMB, v.UsedMB, v.SwapUsedMB, v.MemoryPressure)
+	case ports.DiskHealth:
+		for _, d := range v.Disks {
+			fmt.Printf("%s\t%s\tusage=%.1f%%\tinodes=%.1f%%\ttrend=%s\n", d.Name, d.Mount, d.UsagePercent, d.InodesPercent, d.Trend)
+		}
+	case ports.NetworkStatus:
+		for _, iface := range v.Interfaces {
+			fmt.Printf("%s\t%s\tip=%s\terrors=%d\tdropped=%d\n", iface.Name, iface.State, iface.IP, iface.Errors, iface.Dropped)
+		}
+		for _, conn := range v.Connectivity {
+			fmt.Printf("connectivity\t%s\treachable=%t\n", conn.Target, conn.Reachable)
+		}
+	case ports.TimeStatus:
+		fmt.Printf("current_time\t%s\ntimezone\t%s\tntp_synchronized\t%t\tservice_status\t%s\n", v.CurrentTime, v.Timezone, v.NTPSynchronized, v.ServiceStatus)
+	case ports.ConfiguredProcessStatus:
+		for _, p := range v.Processes {
+			fmt.Printf("%s\tpid=%d\tstatus=%s\tname=%s\n", p.Alias, p.PID, p.Status, p.Name)
+		}
+	case ports.HostHealthSummary:
+		fmt.Printf("status\t%s\ntimestamp\t%s\n", v.Status, v.Timestamp)
+		for _, f := range v.Findings {
+			fmt.Printf("%s\t%s\t%s\t%s\n", f.Severity, f.Code, f.Resource, f.Message)
+		}
+	default:
+		return fmt.Errorf("unsupported diagnostic output for %s", sub)
+	}
+	return nil
 }
 
 func podman(ctx context.Context, args []string) error {

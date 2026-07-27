@@ -97,6 +97,42 @@ func TestReadToolsAndValidation(t *testing.T) {
 	}
 }
 
+func TestDiagnosticReadToolsAuditAndRedact(t *testing.T) {
+	auditRepo := &recordingAudit{}
+	svc := testService(newApprovalRepo(), auditRepo, fakeExecutor{})
+	cpu, err := svc.CPUStatus(context.Background(), "operator")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cpu.Processes[0].Command != "--token=[REDACTED]" {
+		t.Fatalf("command = %q", cpu.Processes[0].Command)
+	}
+	if _, err := svc.MemoryStatus(context.Background(), "operator"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.DiskHealth(context.Background(), "operator", "root"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.DiskHealth(context.Background(), "operator", "missing"); err == nil {
+		t.Fatal("DiskHealth() error = nil, want missing alias error")
+	}
+	if _, err := svc.NetworkStatus(context.Background(), "operator"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.TimeStatus(context.Background(), "operator"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ConfiguredProcessStatus(context.Background(), "operator"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.HostHealthSummary(context.Background(), "operator"); err != nil {
+		t.Fatal(err)
+	}
+	if len(auditRepo.events) != 7 {
+		t.Fatalf("audit events = %d, want 7", len(auditRepo.events))
+	}
+}
+
 func TestCancelAndActionStatus(t *testing.T) {
 	repo := newApprovalRepo()
 	svc := testService(repo, fakeAudit{}, fakeExecutor{})
@@ -505,6 +541,17 @@ type fakeAudit struct{}
 func (fakeAudit) Append(context.Context, audit.Event) error             { return nil }
 func (fakeAudit) ListAudit(context.Context, int) ([]audit.Event, error) { return nil, nil }
 
+type recordingAudit struct {
+	events []audit.Event
+}
+
+func (a *recordingAudit) Append(_ context.Context, event audit.Event) error {
+	a.events = append(a.events, event)
+	return nil
+}
+
+func (a *recordingAudit) ListAudit(context.Context, int) ([]audit.Event, error) { return nil, nil }
+
 type failingAudit struct{}
 
 func (failingAudit) Append(context.Context, audit.Event) error {
@@ -602,6 +649,27 @@ func (fakeExecutor) SystemStatus(context.Context) (ports.SystemStatus, error) {
 }
 func (fakeExecutor) DiskStatus(context.Context, string) (ports.DiskStatus, error) {
 	return ports.DiskStatus{}, nil
+}
+func (fakeExecutor) CPUStatus(context.Context) (ports.CPUStatus, error) {
+	return ports.CPUStatus{UsagePercent: 10, LoadAverage: []float64{0.1, 0.2, 0.3}, Processes: []ports.ProcessUsage{{PID: 123, Name: "worker", Command: "--token=abc"}}}, nil
+}
+func (fakeExecutor) MemoryStatus(context.Context) (ports.MemoryStatus, error) {
+	return ports.MemoryStatus{TotalMB: 1024, AvailableMB: 512}, nil
+}
+func (fakeExecutor) DiskHealth(context.Context, string) (ports.DiskHealth, error) {
+	return ports.DiskHealth{Disks: []ports.DiskHealthItem{{Name: "root", UsagePercent: 50, InodesPercent: 10}}}, nil
+}
+func (fakeExecutor) NetworkStatus(context.Context) (ports.NetworkStatus, error) {
+	return ports.NetworkStatus{}, nil
+}
+func (fakeExecutor) TimeStatus(context.Context) (ports.TimeStatus, error) {
+	return ports.TimeStatus{CurrentTime: "2026-07-24T10:00:00Z", Timezone: "UTC"}, nil
+}
+func (fakeExecutor) ConfiguredProcessStatus(context.Context) (ports.ConfiguredProcessStatus, error) {
+	return ports.ConfiguredProcessStatus{Processes: []ports.ProcessUsage{{PID: 123, Name: "worker", Command: "--token=abc"}}}, nil
+}
+func (fakeExecutor) HostHealthSummary(context.Context) (ports.HostHealthSummary, error) {
+	return ports.HostHealthSummary{Status: "healthy", Timestamp: "2026-07-24T10:00:00Z"}, nil
 }
 func (fakeExecutor) ListServices(context.Context) ([]ports.ServiceSummary, error) { return nil, nil }
 func (fakeExecutor) ServiceStatus(context.Context, string) (service.Status, error) {

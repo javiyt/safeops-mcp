@@ -6,7 +6,7 @@ SafeOps MCP has three core binaries and one optional channel adapter.
 
 `safeops-executor` listens only on a local Unix socket. It resolves configured aliases to systemd units or filesystem paths, validates requests again, and performs only closed operations.
 
-`safeopsctl` is an operator CLI for configuration validation, database migrations, audit and approval listing, and read-only Podman diagnostics.
+`safeopsctl` is an operator CLI for configuration validation, database migrations, audit and approval listing, read-only Podman diagnostics, and read-only host diagnostics.
 
 `safeops-telegram` is an optional channel adapter. It is not a privileged executor and does not expose SafeOps tools directly to Telegram. It accepts private Telegram messages from allowlisted users, calls the configured OpenClaw command, and sends the response back to Telegram.
 
@@ -53,6 +53,17 @@ Read flow:
 3. `safeops-mcp` calls the executor over `/run/safeops/safeops.sock`.
 4. The executor resolves the alias from its own configuration.
 5. The executor returns structured JSON.
+
+Advanced diagnostics flow:
+
+1. The MCP client calls one of the read-only diagnostic tools: `cpu_status`, `memory_status`, `disk_health`, `network_status`, `time_status`, `configured_process_status`, or `host_health_summary`.
+2. `safeops-mcp` validates that no arbitrary path, interface, host, port, command, or process selector was supplied.
+3. The read is audited as `diagnostic_read` without storing sensitive payloads.
+4. The executor routes the closed operation to a subsystem-specific Linux adapter.
+5. CPU and memory prefer `/proc` and `/sys`; disk health uses configured filesystem aliases; network uses local interface metadata and configured ping targets only; time uses local clock metadata and `timedatectl show` when enabled; process diagnostics only match configured service and container aliases.
+6. `host_health_summary` evaluates configured thresholds inside SafeOps and returns objective findings with `severity`, `code`, `message`, and optional `resource`. The LLM explains these findings but must not invent unsupported diagnoses.
+
+Diagnostic adapters are intentionally separate packages instead of a generic host-command adapter. This keeps each subsystem's input surface closed and testable.
 
 Action model:
 

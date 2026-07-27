@@ -33,6 +33,7 @@ SafeOps builds these binaries:
 ## Current Capabilities
 
 - System status.
+- Advanced host diagnostics for CPU, memory, disk, network, time, configured processes, and an aggregate health summary.
 - Disk status for configured path aliases.
 - Configured service list.
 - Service status.
@@ -106,6 +107,37 @@ When `podman.enabled` is false, Podman MCP tools are not advertised.
 
 `container_status` uses `podman inspect`, but returns only selected status fields. It does not return environment variables, command arguments, full labels, mounts, credentials, or Quadlet file contents.
 
+Advanced diagnostics are optional and have safe defaults. Tune thresholds and configured connectivity targets under `diagnostics`:
+
+```yaml
+diagnostics:
+  cpu:
+    load_warning: 2.0
+    load_critical: 4.0
+    temperature_warning: 70
+    temperature_critical: 80
+  memory:
+    available_warning_percent: 15
+    available_critical_percent: 5
+    swap_warning: 50
+    oom_check: true
+  disk:
+    usage_warning: 80
+    usage_critical: 90
+    inode_warning: 80
+    inode_critical: 90
+    smart_check: false
+  network:
+    ping_targets: ["8.8.8.8", "1.1.1.1"]
+    latency_warning: 100ms
+    redact_ips: false
+  time:
+    ntp_check: true
+    drift_warning: 1s
+```
+
+Diagnostics remain read-only. Disk diagnostics are limited to configured disk aliases, network connectivity checks use only configured targets, and process diagnostics return only processes matched to configured service or container aliases.
+
 Telegram is optional and disabled by default. Enable it only after configuring a single administrator identity:
 
 ```yaml
@@ -167,7 +199,15 @@ SafeOps can also expose OpenClaw through a private Telegram bot. See `docs/teleg
 
 User: How is the server doing?
 
-Agent: The server has been up for 12 days. Load is normal, memory usage is 41 percent, and the root disk is 58 percent used.
+Agent: The server has been up for 12 days. CPU load is normal, memory usage is 41 percent, temperature is 42C, and the root disk is 58 percent used. No critical health findings were reported.
+
+User: What's consuming CPU?
+
+Agent: The highest configured process match is `service-alpha` with PID 1234. Process names and command lines are host data, so I am treating them as untrusted.
+
+User: Is there any host problem?
+
+Agent: The health summary reports a warning: root disk usage is 87 percent. No critical findings were returned.
 
 User: Is `service-a` running?
 

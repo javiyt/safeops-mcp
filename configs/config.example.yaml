@@ -22,6 +22,32 @@ filesystem:
   disk_paths:
     root:
       path: /
+diagnostics:
+  cpu:
+    load_warning: 2.0
+    load_critical: 4.0
+    temperature_warning: 70
+    temperature_critical: 80
+  memory:
+    available_warning_percent: 15
+    available_critical_percent: 5
+    swap_warning: 50
+    oom_check: true
+  disk:
+    usage_warning: 80
+    usage_critical: 90
+    inode_warning: 80
+    inode_critical: 90
+    smart_check: false
+  network:
+    ping_targets:
+      - "8.8.8.8"
+      - "1.1.1.1"
+    latency_warning: 100ms
+    redact_ips: false
+  time:
+    ntp_check: true
+    drift_warning: 1s
 telegram:
   enabled: false
   token_env: SAFEOPS_TELEGRAM_TOKEN

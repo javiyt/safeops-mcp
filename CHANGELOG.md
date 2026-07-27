@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.5.0
+
+- Added advanced read-only host diagnostics for CPU, memory, disk health, network, time, configured processes, and aggregate host health summaries.
+- Added diagnostic threshold configuration with safe defaults and configured connectivity targets.
+- Added closed executor operations and MCP tools for `cpu_status`, `memory_status`, `disk_health`, `network_status`, `time_status`, `configured_process_status`, and `host_health_summary`.
+- Added `safeopsctl diagnostics` commands with human-readable and JSON output.
+- Audited diagnostic reads and documented metadata exposure mitigations, IP redaction, configured disk aliases, configured process matching, and network target restrictions.
+
 ## 0.4.0
 
 - Added `safeops-telegram`, an optional private Telegram long-polling adapter for OpenClaw.

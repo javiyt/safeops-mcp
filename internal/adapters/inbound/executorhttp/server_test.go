@@ -28,6 +28,13 @@ func TestHandlers(t *testing.T) {
 	}{
 		{name: "system", method: http.MethodGet, target: "/v1/system/status", handler: s.handleSystemStatus},
 		{name: "disk", method: http.MethodGet, target: "/v1/disks/root", pathValues: map[string]string{"alias": "root"}, handler: s.handleDiskStatus},
+		{name: "cpu", method: http.MethodGet, target: "/v1/diagnostics/cpu", handler: s.handleCPUStatus},
+		{name: "memory", method: http.MethodGet, target: "/v1/diagnostics/memory", handler: s.handleMemoryStatus},
+		{name: "disk_health", method: http.MethodGet, target: "/v1/diagnostics/disks/root", pathValues: map[string]string{"alias": "root"}, handler: s.handleDiskHealth},
+		{name: "network", method: http.MethodGet, target: "/v1/diagnostics/network", handler: s.handleNetworkStatus},
+		{name: "time", method: http.MethodGet, target: "/v1/diagnostics/time", handler: s.handleTimeStatus},
+		{name: "processes", method: http.MethodGet, target: "/v1/diagnostics/processes", handler: s.handleConfiguredProcessStatus},
+		{name: "health_summary", method: http.MethodGet, target: "/v1/diagnostics/health-summary", handler: s.handleHostHealthSummary},
 		{name: "list", method: http.MethodGet, target: "/v1/services", handler: s.handleListServices},
 		{name: "status", method: http.MethodGet, target: "/v1/services/service-alpha/status", pathValues: map[string]string{"alias": "service-alpha"}, handler: s.handleServiceStatus},
 		{name: "logs", method: http.MethodPost, target: "/v1/services/logs", body: `{"service":"service-alpha"}`, handler: s.handleServiceLogs},
@@ -146,6 +153,27 @@ func (b fakeBackend) SystemStatus(context.Context) (ports.SystemStatus, error) {
 }
 func (b fakeBackend) DiskStatus(context.Context, string) (ports.DiskStatus, error) {
 	return ports.DiskStatus{PathAlias: "root"}, b.err
+}
+func (b fakeBackend) CPUStatus(context.Context) (ports.CPUStatus, error) {
+	return ports.CPUStatus{UsagePercent: 10}, b.err
+}
+func (b fakeBackend) MemoryStatus(context.Context) (ports.MemoryStatus, error) {
+	return ports.MemoryStatus{TotalMB: 1024}, b.err
+}
+func (b fakeBackend) DiskHealth(context.Context, string) (ports.DiskHealth, error) {
+	return ports.DiskHealth{Disks: []ports.DiskHealthItem{{Name: "root"}}}, b.err
+}
+func (b fakeBackend) NetworkStatus(context.Context) (ports.NetworkStatus, error) {
+	return ports.NetworkStatus{}, b.err
+}
+func (b fakeBackend) TimeStatus(context.Context) (ports.TimeStatus, error) {
+	return ports.TimeStatus{Timezone: "UTC"}, b.err
+}
+func (b fakeBackend) ConfiguredProcessStatus(context.Context) (ports.ConfiguredProcessStatus, error) {
+	return ports.ConfiguredProcessStatus{}, b.err
+}
+func (b fakeBackend) HostHealthSummary(context.Context) (ports.HostHealthSummary, error) {
+	return ports.HostHealthSummary{Status: "healthy"}, b.err
 }
 func (b fakeBackend) ListServices(context.Context) ([]ports.ServiceSummary, error) {
 	return []ports.ServiceSummary{{Alias: "service-alpha", Status: "active"}}, b.err
