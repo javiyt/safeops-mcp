@@ -52,12 +52,12 @@ podman:
 Validate manually as the executor user:
 
 ```sh
-/usr/bin/podman ps --filter name=app-alpha-container
-/usr/bin/podman inspect --type container --format json app-alpha-container
-systemctl --user status worker-alpha.service
+/usr/bin/podman ps --filter name=app-service-container
+/usr/bin/podman inspect --type container --format json app-service-container
+systemctl --user status worker-service.service
 safeopsctl podman check --config /etc/safeops/config.yaml
 safeopsctl containers list --config /etc/safeops/config.yaml
-safeopsctl containers status container-alpha --config /etc/safeops/config.yaml
+safeopsctl containers status container-a --config /etc/safeops/config.yaml
 ```
 
 `safeopsctl podman check` verifies the configured Podman binary, mode, configured container visibility, user-scoped systemd access when configured, `XDG_RUNTIME_DIR`, and linger when `loginctl` is available. It prints status metadata only; it must not print container environment variables, command arguments, mounts, or secrets from inspect output.

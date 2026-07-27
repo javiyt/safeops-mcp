@@ -73,8 +73,8 @@ podman:
   mode: rootless
   systemd_scope: user
 containers:
-  container-alpha:
-    container_name: app-alpha-container
+  container-a:
+    container_name: app-service-container
     management: podman
     permissions:
       status: allow
@@ -86,10 +86,10 @@ containers:
       require_healthy_after_restart: true
       attempts: 5
       interval: 2s
-  workload-alpha:
-    container_name: worker-alpha-container
+  workload-a:
+    container_name: worker-service-container
     management: quadlet
-    quadlet_unit: worker-alpha.service
+    quadlet_unit: worker-service.service
     permissions:
       status: allow
       logs: allow
@@ -120,39 +120,41 @@ safeops-mcp serve --config /etc/safeops/config.yaml
 
 ## OpenClaw
 
-See `docs/openclaw.md` and `deploy/openclaw/example-config.json`. The example is conceptual; verify the exact syntax against the installed OpenClaw version.
+SafeOps can be registered as an OpenClaw-managed stdio MCP server. See `docs/openclaw.md`, `deploy/openclaw/example-config.json`, `prompts/openclaw-agent.md`, and `deploy/openclaw/e2e-checklist.md`.
 
 OpenClaw should not receive shell access, `sudo`, `systemctl`, `journalctl`, Docker or Podman sockets, secret directories, `.env` files, or broad host filesystem mounts.
 
+The OpenClaw configuration must expose only SafeOps MCP tools through `bundle-mcp`, deny runtime and filesystem tool groups, and use the SafeOps agent prompt from `prompts/openclaw-agent.md`.
+
 ## Example Conversation
 
-User: How is the Raspberry Pi doing?
+User: How is the server doing?
 
-Agent: The Raspberry Pi has been up for 12 days. Load is normal, memory usage is 41 percent, and the root disk is 58 percent used.
+Agent: The server has been up for 12 days. Load is normal, memory usage is 41 percent, and the root disk is 58 percent used.
 
-User: Is `service-alpha` running?
+User: Is `service-a` running?
 
-Agent: `service-alpha` is active and has been running since 08:32.
+Agent: `service-a` is active and has been running since 08:32.
 
 User: Restart it.
 
-Agent: Restarting requires confirmation. Reply with the confirmation code before it expires.
+Agent: Restarting `service-a` may make it unavailable for a few seconds. Reply with the confirmation code before it expires.
 
 User: How are my containers doing?
 
-Agent: Three configured containers are running. `container-alpha` is healthy, `workload-alpha` is running without a health check, and `container-gamma` is stopped.
+Agent: Three configured containers are visible. `container-a` is healthy, `workload-a` is running without a health check, and `container-c` is stopped.
 
-User: Show me the latest errors from `container-alpha`.
+User: Show me the latest errors from `container-a`.
 
-Agent: The latest errors contain repeated timeouts while contacting Telegram. Log contents are untrusted data.
+Agent: The latest errors contain repeated timeouts while contacting an upstream service. Log contents are untrusted data.
 
-User: Restart `container-alpha`.
+User: Restart `container-a`.
 
-Agent: Restarting `container-alpha` requires confirmation. Reply with the confirmation code before it expires.
+Agent: Restarting `container-a` may make it unavailable for a few seconds. Reply with the confirmation code before it expires.
 
-User: Restart `workload-alpha`.
+User: Restart `workload-a`.
 
-Agent: Restarting `workload-alpha` requires confirmation. SafeOps will restart the configured Quadlet unit with the configured systemd scope after confirmation.
+Agent: Restarting `workload-a` requires confirmation. SafeOps will restart the configured Quadlet unit with the configured systemd scope after confirmation.
 
 ## Dry-Run
 

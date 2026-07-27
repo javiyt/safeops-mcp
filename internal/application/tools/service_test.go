@@ -241,6 +241,25 @@ func TestContainerToolsAndRestartApproval(t *testing.T) {
 	}
 }
 
+func TestListContainersReturnsOnlyConfiguredAliases(t *testing.T) {
+	svc := testService(newApprovalRepo(), fakeAudit{}, fakeExecutorWithExtraContainer{})
+	svc.Config.Podman = config.PodmanConfig{Enabled: true, Binary: "/usr/bin/podman", Mode: "rootless", SystemdScope: "user"}
+	svc.Config.Containers = map[string]config.ContainerConfig{
+		"container-alpha": {
+			ContainerName: "app-alpha-container",
+			Management:    "podman",
+			Permissions:   config.PermissionsConfig{Status: "allow", Logs: "allow", Restart: "confirm"},
+		},
+	}
+	containers, err := svc.ListContainers(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(containers) != 1 || containers[0].Alias != "container-alpha" {
+		t.Fatalf("containers = %+v", containers)
+	}
+}
+
 func TestPodmanDisabledRejectsContainerTools(t *testing.T) {
 	svc := testService(newApprovalRepo(), fakeAudit{}, fakeExecutor{})
 	if _, err := svc.ListContainers(context.Background()); err == nil {
@@ -600,6 +619,18 @@ func (e fakeExecutor) RestartService(context.Context, ports.RestartServiceReques
 func (fakeExecutor) ListContainers(context.Context) ([]ports.ContainerSummary, error) {
 	return nil, nil
 }
+
+type fakeExecutorWithExtraContainer struct {
+	fakeExecutor
+}
+
+func (fakeExecutorWithExtraContainer) ListContainers(context.Context) ([]ports.ContainerSummary, error) {
+	return []ports.ContainerSummary{
+		{Alias: "container-alpha", Management: "podman", State: "running", Health: "healthy"},
+		{Alias: "unknown-container", Management: "podman", State: "running", Health: "healthy"},
+	}, nil
+}
+
 func (fakeExecutor) ContainerStatus(context.Context, string) (ports.ContainerStatus, error) {
 	return ports.ContainerStatus{Alias: "container-alpha", State: "running", Health: "healthy"}, nil
 }

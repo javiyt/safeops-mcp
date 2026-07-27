@@ -301,7 +301,17 @@ func (s Service) ListContainers(ctx context.Context) ([]ports.ContainerSummary, 
 	if !s.Config.Podman.Enabled {
 		return nil, errors.New("podman is not enabled")
 	}
-	return s.Executor.ListContainers(ctx)
+	containers, err := s.Executor.ListContainers(ctx)
+	if err != nil {
+		return nil, err
+	}
+	filtered := make([]ports.ContainerSummary, 0, len(containers))
+	for _, container := range containers {
+		if _, ok := s.Config.Containers[container.Alias]; ok {
+			filtered = append(filtered, container)
+		}
+	}
+	return filtered, nil
 }
 
 func (s Service) ContainerStatus(ctx context.Context, alias string) (ports.ContainerStatus, error) {
