@@ -47,6 +47,14 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/system/status", s.handleSystemStatus)
 	mux.HandleFunc("GET /v1/disks/{alias}", s.handleDiskStatus)
+	mux.HandleFunc("GET /v1/diagnostics/cpu", s.handleCPUStatus)
+	mux.HandleFunc("GET /v1/diagnostics/memory", s.handleMemoryStatus)
+	mux.HandleFunc("GET /v1/diagnostics/disks", s.handleDiskHealth)
+	mux.HandleFunc("GET /v1/diagnostics/disks/{alias}", s.handleDiskHealth)
+	mux.HandleFunc("GET /v1/diagnostics/network", s.handleNetworkStatus)
+	mux.HandleFunc("GET /v1/diagnostics/time", s.handleTimeStatus)
+	mux.HandleFunc("GET /v1/diagnostics/processes", s.handleConfiguredProcessStatus)
+	mux.HandleFunc("GET /v1/diagnostics/health-summary", s.handleHostHealthSummary)
 	mux.HandleFunc("GET /v1/services", s.handleListServices)
 	mux.HandleFunc("GET /v1/services/{alias}/status", s.handleServiceStatus)
 	mux.HandleFunc("POST /v1/services/logs", s.handleServiceLogs)
@@ -76,6 +84,41 @@ func (s *Server) handleSystemStatus(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleDiskStatus(w http.ResponseWriter, r *http.Request) {
 	out, err := s.Backend.DiskStatus(r.Context(), r.PathValue("alias"))
+	writeJSON(w, out, err)
+}
+
+func (s *Server) handleCPUStatus(w http.ResponseWriter, r *http.Request) {
+	out, err := s.Backend.CPUStatus(r.Context())
+	writeJSON(w, out, err)
+}
+
+func (s *Server) handleMemoryStatus(w http.ResponseWriter, r *http.Request) {
+	out, err := s.Backend.MemoryStatus(r.Context())
+	writeJSON(w, out, err)
+}
+
+func (s *Server) handleDiskHealth(w http.ResponseWriter, r *http.Request) {
+	out, err := s.Backend.DiskHealth(r.Context(), r.PathValue("alias"))
+	writeJSON(w, out, err)
+}
+
+func (s *Server) handleNetworkStatus(w http.ResponseWriter, r *http.Request) {
+	out, err := s.Backend.NetworkStatus(r.Context())
+	writeJSON(w, out, err)
+}
+
+func (s *Server) handleTimeStatus(w http.ResponseWriter, r *http.Request) {
+	out, err := s.Backend.TimeStatus(r.Context())
+	writeJSON(w, out, err)
+}
+
+func (s *Server) handleConfiguredProcessStatus(w http.ResponseWriter, r *http.Request) {
+	out, err := s.Backend.ConfiguredProcessStatus(r.Context())
+	writeJSON(w, out, err)
+}
+
+func (s *Server) handleHostHealthSummary(w http.ResponseWriter, r *http.Request) {
+	out, err := s.Backend.HostHealthSummary(r.Context())
 	writeJSON(w, out, err)
 }
 

@@ -15,6 +15,12 @@ type ExecutorBackend struct {
 	Config      config.Config
 	Host        HostStatusReader
 	Disk        DiskReader
+	CPU         CPUReader
+	Memory      MemoryReader
+	DiskHealthR DiskHealthReader
+	Network     NetworkReader
+	Time        TimeReader
+	Processes   ConfiguredProcessReader
 	Systemd     SystemdClient
 	Journal     JournalReader
 	Healthcheck HealthcheckClient
@@ -27,6 +33,30 @@ type HostStatusReader interface {
 
 type DiskReader interface {
 	DiskStatus(ctx context.Context, alias string) (ports.DiskStatus, error)
+}
+
+type CPUReader interface {
+	CPUStatus(ctx context.Context) (ports.CPUStatus, error)
+}
+
+type MemoryReader interface {
+	MemoryStatus(ctx context.Context) (ports.MemoryStatus, error)
+}
+
+type DiskHealthReader interface {
+	DiskHealth(ctx context.Context, alias string) (ports.DiskHealth, error)
+}
+
+type NetworkReader interface {
+	NetworkStatus(ctx context.Context) (ports.NetworkStatus, error)
+}
+
+type TimeReader interface {
+	TimeStatus(ctx context.Context) (ports.TimeStatus, error)
+}
+
+type ConfiguredProcessReader interface {
+	ConfiguredProcessStatus(ctx context.Context) (ports.ConfiguredProcessStatus, error)
 }
 
 type SystemdClient interface {
@@ -61,6 +91,70 @@ func (b ExecutorBackend) DiskStatus(ctx context.Context, alias string) (ports.Di
 		return ports.DiskStatus{}, fmt.Errorf("disk path alias %q is not configured", alias)
 	}
 	return b.Disk.DiskStatus(ctx, alias)
+}
+
+func (b ExecutorBackend) CPUStatus(ctx context.Context) (ports.CPUStatus, error) {
+	return b.CPU.CPUStatus(ctx)
+}
+
+func (b ExecutorBackend) MemoryStatus(ctx context.Context) (ports.MemoryStatus, error) {
+	return b.Memory.MemoryStatus(ctx)
+}
+
+func (b ExecutorBackend) DiskHealth(ctx context.Context, alias string) (ports.DiskHealth, error) {
+	if alias != "" {
+		if _, ok := b.Config.Filesystem.DiskPaths[alias]; !ok {
+			return ports.DiskHealth{}, fmt.Errorf("disk alias %q is not configured", alias)
+		}
+	}
+	return b.DiskHealthR.DiskHealth(ctx, alias)
+}
+
+func (b ExecutorBackend) NetworkStatus(ctx context.Context) (ports.NetworkStatus, error) {
+	return b.Network.NetworkStatus(ctx)
+}
+
+func (b ExecutorBackend) TimeStatus(ctx context.Context) (ports.TimeStatus, error) {
+	return b.Time.TimeStatus(ctx)
+}
+
+func (b ExecutorBackend) ConfiguredProcessStatus(ctx context.Context) (ports.ConfiguredProcessStatus, error) {
+	return b.Processes.ConfiguredProcessStatus(ctx)
+}
+
+func (b ExecutorBackend) HostHealthSummary(ctx context.Context) (ports.HostHealthSummary, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	var findings []ports.HealthFinding
+	if cpuStatus, err := b.CPUStatus(ctx); err == nil {
+		findings = append(findings, b.cpuFindings(cpuStatus)...)
+	}
+	if memoryStatus, err := b.MemoryStatus(ctx); err == nil {
+		findings = append(findings, b.memoryFindings(memoryStatus)...)
+	}
+	if disks, err := b.DiskHealth(ctx, ""); err == nil {
+		findings = append(findings, b.diskFindings(disks)...)
+	}
+	if networkStatus, err := b.NetworkStatus(ctx); err == nil {
+		findings = append(findings, b.networkFindings(networkStatus)...)
+	}
+	if timeStatus, err := b.TimeStatus(ctx); err == nil {
+		findings = append(findings, b.timeFindings(timeStatus)...)
+	}
+	sort.SliceStable(findings, func(i, j int) bool {
+		return severityRank(findings[i].Severity) > severityRank(findings[j].Severity)
+	})
+	status := "healthy"
+	for _, finding := range findings {
+		if finding.Severity == "critical" {
+			status = "critical"
+			break
+		}
+		if finding.Severity == "warning" {
+			status = "degraded"
+		}
+	}
+	return ports.HostHealthSummary{Status: status, Findings: findings, Timestamp: time.Now().UTC().Format(time.RFC3339)}, nil
 }
 
 func (b ExecutorBackend) ListServices(ctx context.Context) ([]ports.ServiceSummary, error) {
@@ -289,4 +383,118 @@ func (b ExecutorBackend) RestartContainer(ctx context.Context, req ports.Restart
 		ContainerState: st.State,
 		Health:         ports.ContainerHealthResult{Configured: configured, Status: healthStatus, Attempts: max(runningAttempts, healthAttempts)},
 	}, nil
+}
+
+func (b ExecutorBackend) cpuFindings(st ports.CPUStatus) []ports.HealthFinding {
+	var out []ports.HealthFinding
+	if len(st.LoadAverage) > 0 {
+		load := st.LoadAverage[0]
+		if load >= b.Config.Diagnostics.CPU.LoadCritical {
+			out = append(out, finding("critical", "cpu_high_load", fmt.Sprintf("CPU one-minute load is %.2f.", load), "cpu"))
+		} else if load >= b.Config.Diagnostics.CPU.LoadWarning {
+			out = append(out, finding("warning", "cpu_high_load", fmt.Sprintf("CPU one-minute load is %.2f.", load), "cpu"))
+		}
+	}
+	if st.Temperature != nil {
+		temp := *st.Temperature
+		if temp >= b.Config.Diagnostics.CPU.TemperatureCritical {
+			out = append(out, finding("critical", "cpu_temperature_high", fmt.Sprintf("CPU temperature is %.1fC.", temp), "cpu"))
+		} else if temp >= b.Config.Diagnostics.CPU.TemperatureWarning {
+			out = append(out, finding("warning", "cpu_temperature_high", fmt.Sprintf("CPU temperature is %.1fC.", temp), "cpu"))
+		}
+	}
+	if st.Throttling.Throttled {
+		out = append(out, finding("warning", "cpu_throttled", "CPU throttling is currently reported by the host.", "cpu"))
+	}
+	return out
+}
+
+func (b ExecutorBackend) memoryFindings(st ports.MemoryStatus) []ports.HealthFinding {
+	var out []ports.HealthFinding
+	availablePercent := 100.0
+	if st.TotalMB > 0 {
+		availablePercent = float64(st.AvailableMB) / float64(st.TotalMB) * 100
+	}
+	if availablePercent <= b.Config.Diagnostics.Memory.AvailableCriticalPercent {
+		out = append(out, finding("critical", "memory_available_low", fmt.Sprintf("Available memory is %.1f%%.", availablePercent), "memory"))
+	} else if availablePercent <= b.Config.Diagnostics.Memory.AvailableWarningPercent {
+		out = append(out, finding("warning", "memory_available_low", fmt.Sprintf("Available memory is %.1f%%.", availablePercent), "memory"))
+	}
+	if st.SwapTotalMB > 0 {
+		swapPercent := float64(st.SwapUsedMB) / float64(st.SwapTotalMB) * 100
+		if swapPercent >= b.Config.Diagnostics.Memory.SwapWarning {
+			out = append(out, finding("warning", "swap_usage_high", fmt.Sprintf("Swap usage is %.1f%%.", swapPercent), "swap"))
+		}
+	}
+	if len(st.OOMEvents) > 0 {
+		out = append(out, finding("warning", "oom_events_recent", "Recent OOM events were reported.", "memory"))
+	}
+	return out
+}
+
+func (b ExecutorBackend) diskFindings(st ports.DiskHealth) []ports.HealthFinding {
+	var out []ports.HealthFinding
+	for _, disk := range st.Disks {
+		if disk.UsagePercent >= b.Config.Diagnostics.Disk.UsageCritical {
+			out = append(out, finding("critical", "disk_usage_high", fmt.Sprintf("%s usage is %.1f%%.", disk.Name, disk.UsagePercent), disk.Name))
+		} else if disk.UsagePercent >= b.Config.Diagnostics.Disk.UsageWarning {
+			out = append(out, finding("warning", "disk_usage_high", fmt.Sprintf("%s usage is %.1f%%.", disk.Name, disk.UsagePercent), disk.Name))
+		}
+		if disk.InodesPercent >= b.Config.Diagnostics.Disk.InodeCritical {
+			out = append(out, finding("critical", "disk_inodes_high", fmt.Sprintf("%s inode usage is %.1f%%.", disk.Name, disk.InodesPercent), disk.Name))
+		} else if disk.InodesPercent >= b.Config.Diagnostics.Disk.InodeWarning {
+			out = append(out, finding("warning", "disk_inodes_high", fmt.Sprintf("%s inode usage is %.1f%%.", disk.Name, disk.InodesPercent), disk.Name))
+		}
+		if disk.FilesystemErrors {
+			out = append(out, finding("critical", "filesystem_errors", "Filesystem errors are reported.", disk.Name))
+		}
+		if disk.SMART.Available && disk.SMART.Status != "" && disk.SMART.Status != "PASSED" {
+			out = append(out, finding("critical", "smart_status_failed", "SMART status is not passing.", disk.Name))
+		}
+	}
+	return out
+}
+
+func (b ExecutorBackend) networkFindings(st ports.NetworkStatus) []ports.HealthFinding {
+	var out []ports.HealthFinding
+	for _, iface := range st.Interfaces {
+		if iface.State == "up" && (iface.Errors > 0 || iface.Dropped > 0) {
+			out = append(out, finding("warning", "network_interface_errors", fmt.Sprintf("Interface %s reports packet errors or drops.", iface.Name), iface.Name))
+		}
+	}
+	for _, conn := range st.Connectivity {
+		if !conn.Reachable {
+			out = append(out, finding("warning", "network_connectivity_failed", "Configured connectivity target is unreachable.", conn.Target))
+			continue
+		}
+		if conn.LatencyMS != nil && *conn.LatencyMS >= float64(b.Config.Diagnostics.Network.LatencyWarning.Std().Milliseconds()) {
+			out = append(out, finding("warning", "network_latency_high", fmt.Sprintf("Latency to %s is %.1f ms.", conn.Target, *conn.LatencyMS), conn.Target))
+		}
+	}
+	return out
+}
+
+func (b ExecutorBackend) timeFindings(st ports.TimeStatus) []ports.HealthFinding {
+	if b.Config.Diagnostics.Time.NTPCheck && !st.NTPSynchronized {
+		return []ports.HealthFinding{finding("warning", "time_not_synchronized", "NTP synchronization is not reported as active.", "time")}
+	}
+	if st.DriftSeconds != nil && *st.DriftSeconds >= b.Config.Diagnostics.Time.DriftWarning.Std().Seconds() {
+		return []ports.HealthFinding{finding("warning", "time_drift_high", fmt.Sprintf("Clock drift is %.3f seconds.", *st.DriftSeconds), "time")}
+	}
+	return nil
+}
+
+func finding(severity, code, message, resource string) ports.HealthFinding {
+	return ports.HealthFinding{Severity: severity, Code: code, Message: message, Resource: resource}
+}
+
+func severityRank(severity string) int {
+	switch severity {
+	case "critical":
+		return 3
+	case "warning":
+		return 2
+	default:
+		return 1
+	}
 }

@@ -38,6 +38,45 @@ func (c Client) DiskStatus(ctx context.Context, alias string) (ports.DiskStatus,
 	return out, c.get(ctx, "/v1/disks/"+alias, &out)
 }
 
+func (c Client) CPUStatus(ctx context.Context) (ports.CPUStatus, error) {
+	var out ports.CPUStatus
+	return out, c.get(ctx, "/v1/diagnostics/cpu", &out)
+}
+
+func (c Client) MemoryStatus(ctx context.Context) (ports.MemoryStatus, error) {
+	var out ports.MemoryStatus
+	return out, c.get(ctx, "/v1/diagnostics/memory", &out)
+}
+
+func (c Client) DiskHealth(ctx context.Context, alias string) (ports.DiskHealth, error) {
+	var out ports.DiskHealth
+	path := "/v1/diagnostics/disks"
+	if alias != "" {
+		path += "/" + alias
+	}
+	return out, c.get(ctx, path, &out)
+}
+
+func (c Client) NetworkStatus(ctx context.Context) (ports.NetworkStatus, error) {
+	var out ports.NetworkStatus
+	return out, c.get(ctx, "/v1/diagnostics/network", &out)
+}
+
+func (c Client) TimeStatus(ctx context.Context) (ports.TimeStatus, error) {
+	var out ports.TimeStatus
+	return out, c.get(ctx, "/v1/diagnostics/time", &out)
+}
+
+func (c Client) ConfiguredProcessStatus(ctx context.Context) (ports.ConfiguredProcessStatus, error) {
+	var out ports.ConfiguredProcessStatus
+	return out, c.get(ctx, "/v1/diagnostics/processes", &out)
+}
+
+func (c Client) HostHealthSummary(ctx context.Context) (ports.HostHealthSummary, error) {
+	var out ports.HostHealthSummary
+	return out, c.get(ctx, "/v1/diagnostics/health-summary", &out)
+}
+
 func (c Client) ListServices(ctx context.Context) ([]ports.ServiceSummary, error) {
 	var out struct {
 		Services []ports.ServiceSummary `json:"services"`

@@ -339,6 +339,27 @@ func (fakeExecutor) SystemStatus(context.Context) (ports.SystemStatus, error) {
 func (fakeExecutor) DiskStatus(context.Context, string) (ports.DiskStatus, error) {
 	return ports.DiskStatus{PathAlias: "root"}, nil
 }
+func (fakeExecutor) CPUStatus(context.Context) (ports.CPUStatus, error) {
+	return ports.CPUStatus{UsagePercent: 10}, nil
+}
+func (fakeExecutor) MemoryStatus(context.Context) (ports.MemoryStatus, error) {
+	return ports.MemoryStatus{TotalMB: 1024}, nil
+}
+func (fakeExecutor) DiskHealth(context.Context, string) (ports.DiskHealth, error) {
+	return ports.DiskHealth{Disks: []ports.DiskHealthItem{{Name: "root"}}}, nil
+}
+func (fakeExecutor) NetworkStatus(context.Context) (ports.NetworkStatus, error) {
+	return ports.NetworkStatus{}, nil
+}
+func (fakeExecutor) TimeStatus(context.Context) (ports.TimeStatus, error) {
+	return ports.TimeStatus{Timezone: "UTC"}, nil
+}
+func (fakeExecutor) ConfiguredProcessStatus(context.Context) (ports.ConfiguredProcessStatus, error) {
+	return ports.ConfiguredProcessStatus{}, nil
+}
+func (fakeExecutor) HostHealthSummary(context.Context) (ports.HostHealthSummary, error) {
+	return ports.HostHealthSummary{Status: "healthy"}, nil
+}
 func (fakeExecutor) ListServices(context.Context) ([]ports.ServiceSummary, error) {
 	return []ports.ServiceSummary{{Alias: "service-alpha", Status: "active"}}, nil
 }

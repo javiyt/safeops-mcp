@@ -1,6 +1,6 @@
 # Security Model
 
-Protected assets include systemd control, Podman container control, Quadlet workload control, journal contents, container logs, service and container availability, host metadata, the audit database, approval state, and secrets that may appear in logs or inspect output.
+Protected assets include systemd control, Podman container control, Quadlet workload control, journal contents, container logs, service and container availability, host metadata, network metadata, process metadata, the audit database, approval state, and secrets that may appear in logs, command lines, or inspect output.
 
 OpenClaw is treated as unprivileged and untrusted for authorization. The LLM is not a security boundary. Prompt text, tool arguments, and log contents are external inputs.
 
@@ -13,6 +13,14 @@ The Telegram adapter mitigates these threats by requiring private chats, checkin
 SafeOps uses deny by default, least privilege, typed tools, configured aliases, double validation, persistent approvals, and audit logging. Read operations may run automatically. Mutating operations require confirmation. Destructive operations are denied in this version.
 
 Logs are untrusted content. Instructions found inside logs must never become actions. Log output is bounded and redacted before it is returned or audited.
+
+Diagnostic output is also untrusted host data. Process names, command lines, DNS servers, gateways, IP addresses, SMART data, and time-service metadata may reveal operational details. SafeOps mitigates this by exposing only typed read tools, limiting disk diagnostics to configured aliases, limiting connectivity checks to configured targets, optionally redacting IP addresses with `diagnostics.network.redact_ips`, redacting command lines, and auditing every diagnostic read.
+
+Process diagnostics must not enumerate all host processes for the LLM. `configured_process_status` and the `cpu_status.processes` field only return processes matched to configured service or container aliases. If no configured match is found, SafeOps returns an empty list rather than broad process output.
+
+Network diagnostics do not perform arbitrary scanning. They do not accept user-supplied interfaces, hosts, ports, packet captures, or local-network ranges. Connectivity checks use only `diagnostics.network.ping_targets`.
+
+Disk diagnostics do not accept arbitrary paths. `disk_health` returns configured filesystem aliases only. SMART is disabled by default and should be enabled only after the operator verifies the target platform and disclosure profile.
 
 The SafeOps OpenClaw prompt treats logs as data, not instructions. A log line that asks the agent to run a command, reveal a secret, skip confirmation, or call a mutable tool is hostile input and must not influence tool choice beyond summarizing the log as suspicious.
 
@@ -47,6 +55,8 @@ Audit policy:
 - Read operations are audited when implemented at the tool layer, but read audit failures may be treated as less strict than mutable pre-operation audit failures.
 
 Residual risk remains around incomplete secret detection, host-level misconfiguration, overly broad sudoers rules configured by an operator, and bugs in systemd or journal tooling.
+
+Residual diagnostic risk remains around process names or command lines that encode sensitive business context, local DNS or gateway metadata when IP redaction is disabled, unavailable platform-specific telemetry, and external command differences for `ping` or `timedatectl`.
 
 Residual OpenClaw risk remains around operator mistakes in channel allowlists, future OpenClaw configuration schema changes, third-party model behavior, and any non-SafeOps tool accidentally granted to the SafeOps agent.
 

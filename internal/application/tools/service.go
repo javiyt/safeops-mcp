@@ -78,6 +78,79 @@ func (s Service) DiskStatus(ctx context.Context, alias string) (ports.DiskStatus
 	return s.Executor.DiskStatus(ctx, alias)
 }
 
+func (s Service) CPUStatus(ctx context.Context, userID string) (ports.CPUStatus, error) {
+	out, err := s.Executor.CPUStatus(ctx)
+	if err == nil {
+		for i := range out.Processes {
+			out.Processes[i].Name = redaction.Redact(out.Processes[i].Name)
+			out.Processes[i].Command = redaction.Redact(out.Processes[i].Command)
+		}
+		err = s.auditRead(ctx, userID, "cpu_status", "{}")
+	}
+	return out, err
+}
+
+func (s Service) MemoryStatus(ctx context.Context, userID string) (ports.MemoryStatus, error) {
+	out, err := s.Executor.MemoryStatus(ctx)
+	if err == nil {
+		for i := range out.OOMEvents {
+			out.OOMEvents[i].Process = redaction.Redact(out.OOMEvents[i].Process)
+		}
+		err = s.auditRead(ctx, userID, "memory_status", "{}")
+	}
+	return out, err
+}
+
+func (s Service) DiskHealth(ctx context.Context, userID, alias string) (ports.DiskHealth, error) {
+	if alias != "" {
+		if _, ok := s.Config.Filesystem.DiskPaths[alias]; !ok {
+			return ports.DiskHealth{}, fmt.Errorf("disk alias %q is not configured", alias)
+		}
+	}
+	out, err := s.Executor.DiskHealth(ctx, alias)
+	if err == nil {
+		args, _ := json.Marshal(map[string]string{"disk": alias})
+		err = s.auditRead(ctx, userID, "disk_health", string(args))
+	}
+	return out, err
+}
+
+func (s Service) NetworkStatus(ctx context.Context, userID string) (ports.NetworkStatus, error) {
+	out, err := s.Executor.NetworkStatus(ctx)
+	if err == nil {
+		err = s.auditRead(ctx, userID, "network_status", "{}")
+	}
+	return out, err
+}
+
+func (s Service) TimeStatus(ctx context.Context, userID string) (ports.TimeStatus, error) {
+	out, err := s.Executor.TimeStatus(ctx)
+	if err == nil {
+		err = s.auditRead(ctx, userID, "time_status", "{}")
+	}
+	return out, err
+}
+
+func (s Service) ConfiguredProcessStatus(ctx context.Context, userID string) (ports.ConfiguredProcessStatus, error) {
+	out, err := s.Executor.ConfiguredProcessStatus(ctx)
+	if err == nil {
+		for i := range out.Processes {
+			out.Processes[i].Name = redaction.Redact(out.Processes[i].Name)
+			out.Processes[i].Command = redaction.Redact(out.Processes[i].Command)
+		}
+		err = s.auditRead(ctx, userID, "configured_process_status", "{}")
+	}
+	return out, err
+}
+
+func (s Service) HostHealthSummary(ctx context.Context, userID string) (ports.HostHealthSummary, error) {
+	out, err := s.Executor.HostHealthSummary(ctx)
+	if err == nil {
+		err = s.auditRead(ctx, userID, "host_health_summary", "{}")
+	}
+	return out, err
+}
+
 func (s Service) ListServices(ctx context.Context) ([]ports.ServiceSummary, error) {
 	return s.Executor.ListServices(ctx)
 }
@@ -474,4 +547,8 @@ func (s Service) audit(ctx context.Context, userID, eventType, tool, act, args, 
 		ApprovalID:     approvalID,
 		OperationID:    operationID,
 	})
+}
+
+func (s Service) auditRead(ctx context.Context, userID, tool, args string) error {
+	return s.audit(ctx, userID, "diagnostic_read", tool, "read_diagnostics", args, "read", "allow", "completed", "", "")
 }
