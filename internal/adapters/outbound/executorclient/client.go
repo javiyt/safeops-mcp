@@ -121,6 +121,36 @@ func (c Client) RestartContainer(ctx context.Context, req ports.RestartContainer
 	return out, c.post(ctx, "/v1/containers/restart", req, &out)
 }
 
+func (c Client) RestartGroup(ctx context.Context, req ports.RestartGroupRequest) (ports.RestartGroupResponse, error) {
+	var out ports.RestartGroupResponse
+	return out, c.post(ctx, "/v1/maintenance/groups/restart", req, &out)
+}
+
+func (c Client) RotateLogs(ctx context.Context, req ports.RotateLogsRequest) (ports.RotateLogsResponse, error) {
+	var out ports.RotateLogsResponse
+	return out, c.post(ctx, "/v1/maintenance/logs/rotate", req, &out)
+}
+
+func (c Client) CleanupCache(ctx context.Context, req ports.CleanupCacheRequest) (ports.CleanupCacheResponse, error) {
+	var out ports.CleanupCacheResponse
+	return out, c.post(ctx, "/v1/maintenance/cache/cleanup", req, &out)
+}
+
+func (c Client) ResetFailureState(ctx context.Context, req ports.ResetFailureStateRequest) (ports.ResetFailureStateResponse, error) {
+	var out ports.ResetFailureStateResponse
+	return out, c.post(ctx, "/v1/maintenance/reset-failure", req, &out)
+}
+
+func (c Client) RebootHost(ctx context.Context, req ports.RebootHostRequest) (ports.RebootHostResponse, error) {
+	var out ports.RebootHostResponse
+	return out, c.post(ctx, "/v1/maintenance/reboot", req, &out)
+}
+
+func (c Client) CancelHostReboot(ctx context.Context, req ports.RebootHostRequest) (ports.RebootHostResponse, error) {
+	var out ports.RebootHostResponse
+	return out, c.post(ctx, "/v1/maintenance/reboot/cancel", req, &out)
+}
+
 func (c Client) get(ctx context.Context, path string, out any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://unix"+path, nil)
 	if err != nil {

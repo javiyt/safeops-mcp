@@ -129,3 +129,14 @@ Container restart flow:
 Mutable operations are serialized by resource key `resource_kind + resource_alias`; the SQLite schema includes a persistent lock table for cross-process ownership and recovery. Locks are released after success, failure, or cancellation of the executing context, and expired locks are cleaned before acquiring a new lock.
 
 Add a tool by defining a use case in `internal/application`, adding a closed executor operation if needed, exposing it in `internal/adapters/inbound/mcpstdio`, and testing validation at both boundaries.
+
+Maintenance flow:
+
+1. MCP maintenance tools accept only configured aliases and normalized options such as `dry_run`, `max_age`, and `min_records`.
+2. Non-dry-run maintenance requests create generic approvals with action types `restart_group`, `rotate_logs`, `cleanup_cache`, `remove_records`, `reset_failure`, or `reboot_host`.
+3. `confirm_action` revalidates configuration, policy, owner, confirmation code, arguments hash, and current resource availability before acquiring a persistent operation lock.
+4. The executor receives a closed operation over the Unix socket. It resolves group members, service units, container names, log paths, and cache paths from configuration again.
+5. Group restart stops resources in `stop_order` and starts resources in `order`, with configured timeout and optional health checks.
+6. Log rotation and cache cleanup operate only on configured paths. The executor uses filesystem APIs with controlled paths and does not invoke a shell.
+7. SafeOps record cleanup deletes only old audit and approval rows while preserving the configured minimum record count.
+8. Host reboot is disabled by default. When enabled, it uses a longer confirmation code, checks for active mutable locks, and schedules reboot through the configured restricted command. `cancel_action` can cancel a reboot approval before confirmation or call the executor cancellation operation for a reboot that has already been scheduled.

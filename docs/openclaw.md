@@ -279,3 +279,5 @@ Before accepting the integration:
 - Confirm OpenClaw's tool list contains only SafeOps MCP tools plus required OpenClaw session plumbing for the selected channel mode.
 - Confirm prompt-injection lines in logs are summarized as untrusted data and do not trigger tool calls.
 - Confirm no mutable SafeOps action executed without `request_*_restart` followed by `confirm_action`.
+- Confirm controlled maintenance tools use only configured aliases: `request_group_restart`, `rotate_configured_logs`, `cleanup_application_cache`, `remove_expired_safeops_records`, `reset_resource_failure_state`, and `request_host_reboot`.
+- Confirm host reboot is unavailable unless `host_reboot.enabled` is true and that reboot requests use `request_host_reboot` followed by `confirm_action`.

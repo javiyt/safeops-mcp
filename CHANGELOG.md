@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.7.0
+
+- Added controlled maintenance MCP tools: `request_group_restart`, `rotate_configured_logs`, `cleanup_application_cache`, `remove_expired_safeops_records`, `reset_resource_failure_state`, and `request_host_reboot`.
+- Added `groups` configuration for ordered service/container stack restarts.
+- Added configured log rotation and application cache cleanup with alias-only paths, dry-run support, and bounded retention settings.
+- Added SafeOps audit and approval record cleanup with retention age and minimum-record limits.
+- Added systemd `reset-failed` support for configured service aliases; container failure-state reset returns `not_applicable`.
+- Added opt-in host reboot with longer confirmation codes, operation-lock checks, configurable confirmation window, and restricted executor command documentation.
+- Added executor protocol operations and `safeopsctl groups|logs|cache|records|reset-failed|reboot` maintenance commands.
+- Updated README, architecture, security, operations, OpenClaw, and example configuration documentation for controlled maintenance.
+
 ## 0.6.0
 
 - Added `safeops-monitor`, a separate proactive alert monitor that runs scheduled read-only checks and can send direct Telegram notifications.

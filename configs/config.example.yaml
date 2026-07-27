@@ -132,6 +132,13 @@ podman:
 services:
   service-alpha:
     unit: app-alpha.service
+    log_path: /var/log/service-alpha/app.log
+    log_rotation:
+      enabled: true
+      max_size: 100MB
+      max_age: 7d
+      compress: true
+      keep: 5
     permissions:
       status: allow
       logs: allow
@@ -183,4 +190,50 @@ containers:
     permissions:
       status: allow
       logs: allow
-      restart: deny
+      restart: confirm
+groups:
+  app-stack:
+    resources:
+      - service-alpha
+      - container-gamma
+      - workload-alpha
+    order:
+      - container-gamma
+      - service-alpha
+      - workload-alpha
+    stop_order:
+      - workload-alpha
+      - service-alpha
+      - container-gamma
+    timeout: 60s
+    health_check: true
+applications:
+  app-worker:
+    cache_path: /var/cache/app-worker
+    cleanup:
+      enabled: true
+      max_age: 24h
+      max_size: 1GB
+      timeout: 30s
+log_rotation:
+  default:
+    max_size: 100MB
+    max_age: 7d
+    compress: true
+    keep: 5
+  max_total_size: 1GB
+cache_cleanup:
+  default:
+    max_age: 24h
+    max_size: 1GB
+    timeout: 30s
+audit_retention: 90d
+audit_min_records: 1000
+host_reboot:
+  enabled: false
+  allowed_users: []
+  confirmation_code_length: 6
+  confirmation_window: 5m
+  require_backup: false
+  reboot_command: /usr/bin/sudo
+  cancel_command: /usr/bin/sudo

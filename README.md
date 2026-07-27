@@ -55,6 +55,7 @@ SafeOps builds these binaries:
 - Optional private Telegram bot channel with allowlisted users, rate limiting, message splitting, and confirmation buttons.
 - Proactive alerts for services, containers, executor availability, SQLite state, disk, memory, CPU, and repeated application errors.
 - Alert state management with cooldowns, persistence thresholds, temporary silences, resolution notifications, SQLite persistence, MCP tools, and CLI commands.
+- Controlled maintenance operations for configured group restarts, configured log rotation, configured cache cleanup, SafeOps record retention, systemd failed-state reset, and opt-in host reboot.
 
 ## Configuration
 
@@ -193,6 +194,37 @@ alerts:
 
 The monitor only observes and notifies. It does not restart services, restart containers, edit files, or run maintenance automatically.
 
+Maintenance operations are opt-in and alias based. SafeOps never accepts free paths or free commands from MCP tools. Group restarts use configured service/container aliases, log rotation uses configured `log_path` values, cache cleanup uses configured application cache aliases, and host reboot is disabled unless `host_reboot.enabled` is true:
+
+```yaml
+groups:
+  app-stack:
+    resources: [service-alpha, container-gamma, workload-alpha]
+    order: [container-gamma, service-alpha, workload-alpha]
+    stop_order: [workload-alpha, service-alpha, container-gamma]
+    timeout: 60s
+    health_check: true
+applications:
+  app-worker:
+    cache_path: /var/cache/app-worker
+    cleanup:
+      enabled: true
+      max_age: 24h
+      max_size: 1GB
+log_rotation:
+  default:
+    max_size: 100MB
+    max_age: 7d
+    compress: true
+    keep: 5
+audit_retention: 90d
+audit_min_records: 1000
+host_reboot:
+  enabled: false
+  confirmation_code_length: 6
+  confirmation_window: 5m
+```
+
 ## Running
 
 Run the executor on the host:
@@ -225,6 +257,17 @@ Manage alert state:
 safeopsctl alerts list --status active --config /etc/safeops/config.yaml
 safeopsctl alerts acknowledge alert_service_service-a_service_stopped --config /etc/safeops/config.yaml
 safeopsctl alerts silence alert_service_service-a_service_stopped --duration 1h --config /etc/safeops/config.yaml
+```
+
+Run controlled maintenance from the operator CLI:
+
+```sh
+safeopsctl groups restart app-stack --dry-run --config /etc/safeops/config.yaml
+safeopsctl logs rotate service-alpha --dry-run --config /etc/safeops/config.yaml
+safeopsctl cache cleanup app-worker --dry-run --config /etc/safeops/config.yaml
+safeopsctl records cleanup --max-age 90d --min-records 1000 --dry-run --config /etc/safeops/config.yaml
+safeopsctl reset-failed service-alpha --dry-run --config /etc/safeops/config.yaml
+safeopsctl reboot --delay 5m --dry-run --config /etc/safeops/config.yaml
 ```
 
 ## OpenClaw
@@ -274,6 +317,10 @@ Agent: Restarting `container-a` may make it unavailable for a few seconds. Reply
 User: Restart `workload-a`.
 
 Agent: Restarting `workload-a` requires confirmation. SafeOps will restart the configured Quadlet unit with the configured systemd scope after confirmation.
+
+User: Restart the entire application stack.
+
+Agent: I will restart `container-gamma`, `service-alpha`, and `workload-alpha` in the configured order. Reply with the confirmation code before it expires.
 
 ## Dry-Run
 

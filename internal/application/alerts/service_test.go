@@ -224,6 +224,30 @@ func (f *fakeExecutor) RestartContainer(context.Context, ports.RestartContainerR
 	return ports.RestartContainerResponse{}, nil
 }
 
+func (f *fakeExecutor) RestartGroup(context.Context, ports.RestartGroupRequest) (ports.RestartGroupResponse, error) {
+	return ports.RestartGroupResponse{}, nil
+}
+
+func (f *fakeExecutor) RotateLogs(context.Context, ports.RotateLogsRequest) (ports.RotateLogsResponse, error) {
+	return ports.RotateLogsResponse{}, nil
+}
+
+func (f *fakeExecutor) CleanupCache(context.Context, ports.CleanupCacheRequest) (ports.CleanupCacheResponse, error) {
+	return ports.CleanupCacheResponse{}, nil
+}
+
+func (f *fakeExecutor) ResetFailureState(context.Context, ports.ResetFailureStateRequest) (ports.ResetFailureStateResponse, error) {
+	return ports.ResetFailureStateResponse{}, nil
+}
+
+func (f *fakeExecutor) RebootHost(context.Context, ports.RebootHostRequest) (ports.RebootHostResponse, error) {
+	return ports.RebootHostResponse{}, nil
+}
+
+func (f *fakeExecutor) CancelHostReboot(context.Context, ports.RebootHostRequest) (ports.RebootHostResponse, error) {
+	return ports.RebootHostResponse{}, nil
+}
+
 var _ ports.ExecutorClient = (*fakeExecutor)(nil)
 var _ ports.AuditRepository = (*sqlitestore.Store)(nil)
 var _ ports.AlertRepository = (*sqlitestore.Store)(nil)

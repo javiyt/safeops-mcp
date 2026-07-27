@@ -15,19 +15,26 @@ import (
 )
 
 type Config struct {
-	Server      ServerConfig               `yaml:"server"`
-	Identity    IdentityConfig             `yaml:"identity"`
-	Database    DatabaseConfig             `yaml:"database"`
-	Socket      SocketConfig               `yaml:"socket"`
-	Policies    PoliciesConfig             `yaml:"policies"`
-	Limits      LimitsConfig               `yaml:"limits"`
-	Filesystem  FilesystemConfig           `yaml:"filesystem"`
-	Diagnostics DiagnosticsConfig          `yaml:"diagnostics"`
-	Alerts      AlertsConfig               `yaml:"alerts"`
-	Telegram    TelegramConfig             `yaml:"telegram"`
-	Services    map[string]ServiceConfig   `yaml:"services"`
-	Podman      PodmanConfig               `yaml:"podman"`
-	Containers  map[string]ContainerConfig `yaml:"containers"`
+	Server          ServerConfig                 `yaml:"server"`
+	Identity        IdentityConfig               `yaml:"identity"`
+	Database        DatabaseConfig               `yaml:"database"`
+	Socket          SocketConfig                 `yaml:"socket"`
+	Policies        PoliciesConfig               `yaml:"policies"`
+	Limits          LimitsConfig                 `yaml:"limits"`
+	Filesystem      FilesystemConfig             `yaml:"filesystem"`
+	Diagnostics     DiagnosticsConfig            `yaml:"diagnostics"`
+	Alerts          AlertsConfig                 `yaml:"alerts"`
+	Telegram        TelegramConfig               `yaml:"telegram"`
+	Services        map[string]ServiceConfig     `yaml:"services"`
+	Podman          PodmanConfig                 `yaml:"podman"`
+	Containers      map[string]ContainerConfig   `yaml:"containers"`
+	Groups          map[string]GroupConfig       `yaml:"groups"`
+	Applications    map[string]ApplicationConfig `yaml:"applications"`
+	LogRotation     LogRotationConfig            `yaml:"log_rotation"`
+	CacheCleanup    CacheCleanupConfig           `yaml:"cache_cleanup"`
+	AuditRetention  Duration                     `yaml:"audit_retention"`
+	AuditMinRecords int                          `yaml:"audit_min_records"`
+	HostReboot      HostRebootConfig             `yaml:"host_reboot"`
 }
 
 type ServerConfig struct {
@@ -196,9 +203,11 @@ type DiskPathConfig struct {
 }
 
 type ServiceConfig struct {
-	Unit        string             `yaml:"unit"`
-	Permissions PermissionsConfig  `yaml:"permissions"`
-	Healthcheck *HealthcheckConfig `yaml:"healthcheck,omitempty"`
+	Unit        string                    `yaml:"unit"`
+	Permissions PermissionsConfig         `yaml:"permissions"`
+	Healthcheck *HealthcheckConfig        `yaml:"healthcheck,omitempty"`
+	LogPath     string                    `yaml:"log_path"`
+	LogRotation ResourceLogRotationConfig `yaml:"log_rotation"`
 }
 
 type PermissionsConfig struct {
@@ -222,12 +231,61 @@ type PodmanConfig struct {
 }
 
 type ContainerConfig struct {
-	ContainerName string                `yaml:"container_name"`
-	Management    string                `yaml:"management"`
-	QuadletUnit   string                `yaml:"quadlet_unit"`
-	Permissions   PermissionsConfig     `yaml:"permissions"`
-	Logs          ContainerLogsConfig   `yaml:"logs"`
-	Health        ContainerHealthConfig `yaml:"health"`
+	ContainerName string                    `yaml:"container_name"`
+	Management    string                    `yaml:"management"`
+	QuadletUnit   string                    `yaml:"quadlet_unit"`
+	Permissions   PermissionsConfig         `yaml:"permissions"`
+	Logs          ContainerLogsConfig       `yaml:"logs"`
+	Health        ContainerHealthConfig     `yaml:"health"`
+	LogPath       string                    `yaml:"log_path"`
+	LogRotation   ResourceLogRotationConfig `yaml:"log_rotation"`
+}
+
+type GroupConfig struct {
+	Resources   []string `yaml:"resources"`
+	Order       []string `yaml:"order"`
+	StopOrder   []string `yaml:"stop_order"`
+	Timeout     Duration `yaml:"timeout"`
+	HealthCheck bool     `yaml:"health_check"`
+}
+
+type ResourceLogRotationConfig struct {
+	Enabled  bool     `yaml:"enabled"`
+	MaxSize  ByteSize `yaml:"max_size"`
+	MaxAge   Duration `yaml:"max_age"`
+	Compress bool     `yaml:"compress"`
+	Keep     int      `yaml:"keep"`
+}
+
+type LogRotationConfig struct {
+	Default      ResourceLogRotationConfig `yaml:"default"`
+	MaxTotalSize ByteSize                  `yaml:"max_total_size"`
+}
+
+type ApplicationConfig struct {
+	CachePath string                `yaml:"cache_path"`
+	Cleanup   ResourceCleanupConfig `yaml:"cleanup"`
+}
+
+type ResourceCleanupConfig struct {
+	Enabled bool     `yaml:"enabled"`
+	MaxAge  Duration `yaml:"max_age"`
+	MaxSize ByteSize `yaml:"max_size"`
+	Timeout Duration `yaml:"timeout"`
+}
+
+type CacheCleanupConfig struct {
+	Default ResourceCleanupConfig `yaml:"default"`
+}
+
+type HostRebootConfig struct {
+	Enabled                bool     `yaml:"enabled"`
+	AllowedUsers           []string `yaml:"allowed_users"`
+	ConfirmationCodeLength int      `yaml:"confirmation_code_length"`
+	ConfirmationWindow     Duration `yaml:"confirmation_window"`
+	RequireBackup          bool     `yaml:"require_backup"`
+	RebootCommand          string   `yaml:"reboot_command"`
+	CancelCommand          string   `yaml:"cancel_command"`
 }
 
 type ContainerLogsConfig struct {
@@ -279,7 +337,7 @@ func (d *Duration) UnmarshalYAML(value *yaml.Node) error {
 	if err := value.Decode(&raw); err != nil {
 		return err
 	}
-	parsed, err := time.ParseDuration(raw)
+	parsed, err := parseDuration(raw)
 	if err != nil {
 		return fmt.Errorf("invalid duration %q: %w", raw, err)
 	}
@@ -289,6 +347,25 @@ func (d *Duration) UnmarshalYAML(value *yaml.Node) error {
 
 func (d Duration) Std() time.Duration {
 	return time.Duration(d)
+}
+
+type ByteSize int64
+
+func (s *ByteSize) UnmarshalYAML(value *yaml.Node) error {
+	var raw string
+	if err := value.Decode(&raw); err != nil {
+		return err
+	}
+	parsed, err := parseByteSize(raw)
+	if err != nil {
+		return fmt.Errorf("invalid byte size %q: %w", raw, err)
+	}
+	*s = ByteSize(parsed)
+	return nil
+}
+
+func (s ByteSize) Int64() int64 {
+	return int64(s)
 }
 
 func Load(path string) (Config, error) {
@@ -350,6 +427,49 @@ func (cfg *Config) ApplyDefaults() {
 		cfg.Diagnostics.Time.DriftWarning = Duration(time.Second)
 	}
 	cfg.applyAlertDefaults()
+	cfg.applyMaintenanceDefaults()
+}
+
+func (cfg *Config) applyMaintenanceDefaults() {
+	if cfg.LogRotation.Default.MaxSize.Int64() == 0 {
+		cfg.LogRotation.Default.MaxSize = ByteSize(100 * 1024 * 1024)
+	}
+	if cfg.LogRotation.Default.MaxAge.Std() == 0 {
+		cfg.LogRotation.Default.MaxAge = Duration(7 * 24 * time.Hour)
+	}
+	if cfg.LogRotation.Default.Keep == 0 {
+		cfg.LogRotation.Default.Keep = 5
+	}
+	if cfg.LogRotation.MaxTotalSize.Int64() == 0 {
+		cfg.LogRotation.MaxTotalSize = ByteSize(1024 * 1024 * 1024)
+	}
+	if cfg.CacheCleanup.Default.MaxAge.Std() == 0 {
+		cfg.CacheCleanup.Default.MaxAge = Duration(24 * time.Hour)
+	}
+	if cfg.CacheCleanup.Default.MaxSize.Int64() == 0 {
+		cfg.CacheCleanup.Default.MaxSize = ByteSize(1024 * 1024 * 1024)
+	}
+	if cfg.CacheCleanup.Default.Timeout.Std() == 0 {
+		cfg.CacheCleanup.Default.Timeout = Duration(30 * time.Second)
+	}
+	if cfg.AuditRetention.Std() == 0 {
+		cfg.AuditRetention = Duration(90 * 24 * time.Hour)
+	}
+	if cfg.AuditMinRecords == 0 {
+		cfg.AuditMinRecords = 1000
+	}
+	if cfg.HostReboot.ConfirmationCodeLength == 0 {
+		cfg.HostReboot.ConfirmationCodeLength = 6
+	}
+	if cfg.HostReboot.ConfirmationWindow.Std() == 0 {
+		cfg.HostReboot.ConfirmationWindow = Duration(5 * time.Minute)
+	}
+	if cfg.HostReboot.RebootCommand == "" {
+		cfg.HostReboot.RebootCommand = "/usr/bin/sudo"
+	}
+	if cfg.HostReboot.CancelCommand == "" {
+		cfg.HostReboot.CancelCommand = "/usr/bin/sudo"
+	}
 }
 
 func (cfg *Config) applyAlertDefaults() {
@@ -486,6 +606,7 @@ func Validate(cfg Config) error {
 	}
 	validateDiagnostics(&errs, cfg)
 	validateAlerts(&errs, cfg)
+	validateMaintenance(&errs, cfg)
 	for alias := range cfg.Services {
 		if _, ok := cfg.Containers[alias]; ok {
 			errs = append(errs, fmt.Errorf("alias %q is ambiguous between services and containers", alias))
@@ -504,10 +625,139 @@ func Validate(cfg Config) error {
 		if svc.Healthcheck != nil {
 			validateHealthcheck(&errs, alias, *svc.Healthcheck, cfg.Limits.MaxHealthcheckAttempts)
 		}
+		validateLogConfig(&errs, "services["+alias+"]", svc.LogPath, svc.LogRotation, cfg.LogRotation.Default)
 	}
 	validateTelegram(&errs, cfg)
 	validatePodman(&errs, cfg)
 	return errors.Join(errs...)
+}
+
+func validateMaintenance(errs *[]error, cfg Config) {
+	if cfg.LogRotation.Default.MaxSize.Int64() <= 0 {
+		*errs = append(*errs, errors.New("log_rotation.default.max_size must be positive"))
+	}
+	if cfg.LogRotation.Default.MaxAge.Std() <= 0 {
+		*errs = append(*errs, errors.New("log_rotation.default.max_age must be positive"))
+	}
+	if cfg.LogRotation.Default.Keep <= 0 || cfg.LogRotation.Default.Keep > 50 {
+		*errs = append(*errs, errors.New("log_rotation.default.keep must be between 1 and 50"))
+	}
+	if cfg.LogRotation.MaxTotalSize.Int64() <= 0 {
+		*errs = append(*errs, errors.New("log_rotation.max_total_size must be positive"))
+	}
+	if cfg.CacheCleanup.Default.MaxAge.Std() <= 0 {
+		*errs = append(*errs, errors.New("cache_cleanup.default.max_age must be positive"))
+	}
+	if cfg.CacheCleanup.Default.MaxSize.Int64() <= 0 {
+		*errs = append(*errs, errors.New("cache_cleanup.default.max_size must be positive"))
+	}
+	if cfg.CacheCleanup.Default.Timeout.Std() <= 0 {
+		*errs = append(*errs, errors.New("cache_cleanup.default.timeout must be positive"))
+	}
+	if cfg.AuditRetention.Std() <= 0 {
+		*errs = append(*errs, errors.New("audit_retention must be positive"))
+	}
+	if cfg.AuditMinRecords < 0 {
+		*errs = append(*errs, errors.New("audit_min_records must not be negative"))
+	}
+	for alias, group := range cfg.Groups {
+		if !validAlias(alias) {
+			*errs = append(*errs, fmt.Errorf("groups[%q] has an invalid alias", alias))
+		}
+		if len(group.Resources) == 0 {
+			*errs = append(*errs, fmt.Errorf("groups[%q].resources must not be empty", alias))
+		}
+		seen := map[string]bool{}
+		for _, resource := range group.Resources {
+			if !cfg.hasResource(resource) {
+				*errs = append(*errs, fmt.Errorf("groups[%q].resources contains unknown resource %q", alias, resource))
+			}
+			if seen[resource] {
+				*errs = append(*errs, fmt.Errorf("groups[%q].resources contains duplicate resource %q", alias, resource))
+			}
+			seen[resource] = true
+		}
+		validateGroupOrder(errs, alias, "order", group.Resources, group.Order)
+		validateGroupOrder(errs, alias, "stop_order", group.Resources, group.StopOrder)
+		if group.Timeout.Std() < 0 {
+			*errs = append(*errs, fmt.Errorf("groups[%q].timeout must not be negative", alias))
+		}
+	}
+	for alias, app := range cfg.Applications {
+		if !validAlias(alias) {
+			*errs = append(*errs, fmt.Errorf("applications[%q] has an invalid alias", alias))
+		}
+		if strings.TrimSpace(app.CachePath) == "" {
+			*errs = append(*errs, fmt.Errorf("applications[%q].cache_path is required", alias))
+		} else if !filepath.IsAbs(app.CachePath) {
+			*errs = append(*errs, fmt.Errorf("applications[%q].cache_path must be absolute", alias))
+		}
+		cleanup := mergeCleanup(app.Cleanup, cfg.CacheCleanup.Default)
+		if app.Cleanup.Enabled && (cleanup.MaxAge.Std() <= 0 || cleanup.MaxSize.Int64() <= 0 || cleanup.Timeout.Std() <= 0) {
+			*errs = append(*errs, fmt.Errorf("applications[%q].cleanup limits must be positive", alias))
+		}
+	}
+	if cfg.HostReboot.Enabled {
+		if cfg.HostReboot.ConfirmationCodeLength < 6 || cfg.HostReboot.ConfirmationCodeLength > 12 {
+			*errs = append(*errs, errors.New("host_reboot.confirmation_code_length must be between 6 and 12"))
+		}
+		if cfg.HostReboot.ConfirmationWindow.Std() <= 0 {
+			*errs = append(*errs, errors.New("host_reboot.confirmation_window must be positive"))
+		}
+		if !filepath.IsAbs(cfg.HostReboot.RebootCommand) {
+			*errs = append(*errs, errors.New("host_reboot.reboot_command must be absolute"))
+		}
+		if !filepath.IsAbs(cfg.HostReboot.CancelCommand) {
+			*errs = append(*errs, errors.New("host_reboot.cancel_command must be absolute"))
+		}
+	}
+}
+
+func validateLogConfig(errs *[]error, name, path string, local, def ResourceLogRotationConfig) {
+	if !local.Enabled {
+		return
+	}
+	if strings.TrimSpace(path) == "" {
+		*errs = append(*errs, fmt.Errorf("%s.log_path is required when log_rotation.enabled is true", name))
+		return
+	}
+	if !filepath.IsAbs(path) {
+		*errs = append(*errs, fmt.Errorf("%s.log_path must be absolute", name))
+	}
+	merged := mergeLogRotation(local, def)
+	if merged.MaxSize.Int64() <= 0 || merged.MaxAge.Std() <= 0 || merged.Keep <= 0 || merged.Keep > 50 {
+		*errs = append(*errs, fmt.Errorf("%s.log_rotation limits are invalid", name))
+	}
+}
+
+func validateGroupOrder(errs *[]error, alias, field string, resources, order []string) {
+	if len(order) == 0 {
+		return
+	}
+	if len(order) != len(resources) {
+		*errs = append(*errs, fmt.Errorf("groups[%q].%s must include every group resource exactly once", alias, field))
+		return
+	}
+	allowed := map[string]int{}
+	for _, resource := range resources {
+		allowed[resource]++
+	}
+	for _, resource := range order {
+		if allowed[resource] != 1 {
+			*errs = append(*errs, fmt.Errorf("groups[%q].%s contains unknown or duplicate resource %q", alias, field, resource))
+		}
+		allowed[resource]--
+	}
+}
+
+func (cfg Config) hasResource(alias string) bool {
+	if _, ok := cfg.Services[alias]; ok {
+		return true
+	}
+	if _, ok := cfg.Containers[alias]; ok {
+		return true
+	}
+	return false
 }
 
 func validateAlerts(errs *[]error, cfg Config) {
@@ -719,7 +969,34 @@ func validatePodman(errs *[]error, cfg Config) {
 		if ctr.Permissions.Status == "deny" && ctr.Permissions.Logs == "deny" && ctr.Permissions.Restart == "deny" {
 			*errs = append(*errs, fmt.Errorf("containers[%q] denies all operations without a documented reason", alias))
 		}
+		validateLogConfig(errs, "containers["+alias+"]", ctr.LogPath, ctr.LogRotation, cfg.LogRotation.Default)
 	}
+}
+
+func mergeLogRotation(local, def ResourceLogRotationConfig) ResourceLogRotationConfig {
+	if local.MaxSize.Int64() == 0 {
+		local.MaxSize = def.MaxSize
+	}
+	if local.MaxAge.Std() == 0 {
+		local.MaxAge = def.MaxAge
+	}
+	if local.Keep == 0 {
+		local.Keep = def.Keep
+	}
+	return local
+}
+
+func mergeCleanup(local, def ResourceCleanupConfig) ResourceCleanupConfig {
+	if local.MaxAge.Std() == 0 {
+		local.MaxAge = def.MaxAge
+	}
+	if local.MaxSize.Int64() == 0 {
+		local.MaxSize = def.MaxSize
+	}
+	if local.Timeout.Std() == 0 {
+		local.Timeout = def.Timeout
+	}
+	return local
 }
 
 func validateTelegram(errs *[]error, cfg Config) {
@@ -784,6 +1061,48 @@ func validateTelegram(errs *[]error, cfg Config) {
 
 func validEnvName(name string) bool {
 	return regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`).MatchString(name)
+}
+
+func parseDuration(raw string) (time.Duration, error) {
+	raw = strings.TrimSpace(raw)
+	if strings.HasSuffix(raw, "d") {
+		days, err := strconv.Atoi(strings.TrimSuffix(raw, "d"))
+		if err != nil || days <= 0 {
+			return 0, fmt.Errorf("day duration must be positive")
+		}
+		return time.Duration(days) * 24 * time.Hour, nil
+	}
+	return time.ParseDuration(raw)
+}
+
+func parseByteSize(raw string) (int64, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, errors.New("empty byte size")
+	}
+	multiplier := int64(1)
+	upper := strings.ToUpper(raw)
+	for _, unit := range []struct {
+		suffix string
+		value  int64
+	}{
+		{"GB", 1024 * 1024 * 1024},
+		{"MB", 1024 * 1024},
+		{"KB", 1024},
+		{"B", 1},
+	} {
+		suffix, value := unit.suffix, unit.value
+		if strings.HasSuffix(upper, suffix) {
+			multiplier = value
+			raw = strings.TrimSpace(raw[:len(raw)-len(suffix)])
+			break
+		}
+	}
+	value, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || value <= 0 {
+		return 0, fmt.Errorf("byte size must be a positive integer with optional B, KB, MB, or GB suffix")
+	}
+	return value * multiplier, nil
 }
 
 func validateContainerPermission(errs *[]error, alias, name, value string, restart bool) {

@@ -31,6 +31,8 @@ type ApprovalRepository interface {
 	List(ctx context.Context, limit int) ([]approval.Approval, error)
 	AcquireOperationLock(ctx context.Context, resourceKind, resourceAlias, operationID string, expiresAt time.Time) error
 	ReleaseOperationLock(ctx context.Context, resourceKind, resourceAlias, operationID string) error
+	CountOperationsInProgress(ctx context.Context) (int, error)
+	PruneRecords(ctx context.Context, before time.Time, minRecords int, dryRun bool) (PruneRecordsResponse, error)
 }
 
 type AuditRepository interface {
@@ -69,6 +71,12 @@ type ExecutorClient interface {
 	ContainerStatus(ctx context.Context, alias string) (ContainerStatus, error)
 	ContainerLogs(ctx context.Context, req ContainerLogsRequest) (ContainerLogsResponse, error)
 	RestartContainer(ctx context.Context, req RestartContainerRequest) (RestartContainerResponse, error)
+	RestartGroup(ctx context.Context, req RestartGroupRequest) (RestartGroupResponse, error)
+	RotateLogs(ctx context.Context, req RotateLogsRequest) (RotateLogsResponse, error)
+	CleanupCache(ctx context.Context, req CleanupCacheRequest) (CleanupCacheResponse, error)
+	ResetFailureState(ctx context.Context, req ResetFailureStateRequest) (ResetFailureStateResponse, error)
+	RebootHost(ctx context.Context, req RebootHostRequest) (RebootHostResponse, error)
+	CancelHostReboot(ctx context.Context, req RebootHostRequest) (RebootHostResponse, error)
 }
 
 type ExecutorServer interface {
@@ -89,6 +97,12 @@ type ExecutorServer interface {
 	ContainerStatus(ctx context.Context, alias string) (ContainerStatus, error)
 	ContainerLogs(ctx context.Context, req ContainerLogsRequest) (ContainerLogsResponse, error)
 	RestartContainer(ctx context.Context, req RestartContainerRequest) (RestartContainerResponse, error)
+	RestartGroup(ctx context.Context, req RestartGroupRequest) (RestartGroupResponse, error)
+	RotateLogs(ctx context.Context, req RotateLogsRequest) (RotateLogsResponse, error)
+	CleanupCache(ctx context.Context, req CleanupCacheRequest) (CleanupCacheResponse, error)
+	ResetFailureState(ctx context.Context, req ResetFailureStateRequest) (ResetFailureStateResponse, error)
+	RebootHost(ctx context.Context, req RebootHostRequest) (RebootHostResponse, error)
+	CancelHostReboot(ctx context.Context, req RebootHostRequest) (RebootHostResponse, error)
 }
 
 type SystemStatus struct {
@@ -358,4 +372,95 @@ type ContainerHealthResult struct {
 	Configured bool   `json:"configured"`
 	Status     string `json:"status"`
 	Attempts   int    `json:"attempts"`
+}
+
+type RestartGroupRequest struct {
+	Group       string `json:"group"`
+	OperationID string `json:"operation_id"`
+	DryRun      bool   `json:"dry_run"`
+}
+
+type RestartGroupResponse struct {
+	Status   string            `json:"status"`
+	Action   string            `json:"action"`
+	Group    string            `json:"group"`
+	Steps    []MaintenanceStep `json:"steps"`
+	WouldRun []string          `json:"would_run,omitempty"`
+}
+
+type MaintenanceStep struct {
+	ResourceKind string `json:"resource_kind"`
+	Resource     string `json:"resource"`
+	Operation    string `json:"operation"`
+	Status       string `json:"status"`
+}
+
+type RotateLogsRequest struct {
+	Resource    string `json:"resource,omitempty"`
+	OperationID string `json:"operation_id"`
+	DryRun      bool   `json:"dry_run"`
+}
+
+type RotateLogsResponse struct {
+	Status       string   `json:"status"`
+	Rotated      bool     `json:"rotated"`
+	FilesRotated []string `json:"files_rotated"`
+	Compressed   bool     `json:"compressed"`
+	Deleted      []string `json:"deleted"`
+	SpaceFreedMB int64    `json:"space_freed_mb"`
+	DryRun       bool     `json:"dry_run"`
+}
+
+type CleanupCacheRequest struct {
+	Resource    string `json:"resource"`
+	OperationID string `json:"operation_id"`
+	DryRun      bool   `json:"dry_run"`
+}
+
+type CleanupCacheResponse struct {
+	Status        string `json:"status"`
+	FilesDeleted  int    `json:"files_deleted,omitempty"`
+	FilesToDelete int    `json:"files_to_delete,omitempty"`
+	SpaceFreedMB  int64  `json:"space_freed_mb,omitempty"`
+	SpaceToFreeMB int64  `json:"space_to_free_mb,omitempty"`
+	OldestFileAge string `json:"oldest_file_age,omitempty"`
+	DryRun        bool   `json:"dry_run"`
+}
+
+type PruneRecordsResponse struct {
+	Status           string `json:"status"`
+	RecordsToDelete  int64  `json:"records_to_delete"`
+	RecordsDeleted   int64  `json:"records_deleted,omitempty"`
+	RecordsRemaining int64  `json:"records_remaining"`
+	DryRun           bool   `json:"dry_run"`
+}
+
+type ResetFailureStateRequest struct {
+	Resource    string `json:"resource"`
+	OperationID string `json:"operation_id"`
+	DryRun      bool   `json:"dry_run"`
+}
+
+type ResetFailureStateResponse struct {
+	Status         string `json:"status"`
+	ResourceKind   string `json:"resource_kind"`
+	Resource       string `json:"resource"`
+	ResetOperation string `json:"reset_operation"`
+	Result         string `json:"result"`
+	WouldRun       string `json:"would_run,omitempty"`
+}
+
+type RebootHostRequest struct {
+	Delay       string `json:"delay,omitempty"`
+	OperationID string `json:"operation_id"`
+	DryRun      bool   `json:"dry_run"`
+}
+
+type RebootHostResponse struct {
+	Status         string         `json:"status"`
+	Action         string         `json:"action"`
+	Delay          string         `json:"delay"`
+	ExpectedEffect string         `json:"expected_effect"`
+	CheckResults   map[string]any `json:"check_results"`
+	WouldRun       string         `json:"would_run,omitempty"`
 }

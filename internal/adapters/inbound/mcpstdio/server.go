@@ -213,6 +213,42 @@ func (s Server) callTool(ctx context.Context, name string, args json.RawMessage)
 			return nil, err
 		}
 		return s.Tools.RequestContainerRestart(ctx, s.UserID, in)
+	case "request_group_restart":
+		var in tools.RequestGroupRestartInput
+		if err := json.Unmarshal(args, &in); err != nil {
+			return nil, err
+		}
+		return s.Tools.RequestGroupRestart(ctx, s.UserID, in)
+	case "rotate_configured_logs":
+		var in tools.RotateConfiguredLogsInput
+		if err := json.Unmarshal(args, &in); err != nil {
+			return nil, err
+		}
+		return s.Tools.RotateConfiguredLogs(ctx, s.UserID, in)
+	case "cleanup_application_cache":
+		var in tools.CleanupApplicationCacheInput
+		if err := json.Unmarshal(args, &in); err != nil {
+			return nil, err
+		}
+		return s.Tools.CleanupApplicationCache(ctx, s.UserID, in)
+	case "remove_expired_safeops_records":
+		var in tools.RemoveExpiredSafeOpsRecordsInput
+		if err := json.Unmarshal(args, &in); err != nil {
+			return nil, err
+		}
+		return s.Tools.RemoveExpiredSafeOpsRecords(ctx, s.UserID, in)
+	case "reset_resource_failure_state":
+		var in tools.ResetFailureStateInput
+		if err := json.Unmarshal(args, &in); err != nil {
+			return nil, err
+		}
+		return s.Tools.ResetResourceFailureState(ctx, s.UserID, in)
+	case "request_host_reboot":
+		var in tools.RequestHostRebootInput
+		if err := json.Unmarshal(args, &in); err != nil {
+			return nil, err
+		}
+		return s.Tools.RequestHostReboot(ctx, s.UserID, in)
 	default:
 		return nil, fmt.Errorf("tool %q is not supported", name)
 	}
@@ -248,6 +284,12 @@ func toolDefinitions(podmanEnabled bool) []map[string]any {
 		tool("confirm_action", "Mutable SafeOps tool. Confirms and executes a pending approved action only when the confirmation code, configured user, action parameters, policy, and current configuration revalidate; the action has not executed until this tool returns a final result.", map[string]any{"type": "object", "required": []string{"approval_id", "confirmation_code"}, "additionalProperties": false, "properties": map[string]any{"approval_id": map[string]string{"type": "string"}, "confirmation_code": map[string]string{"type": "string"}}}),
 		tool("cancel_action", "Mutable SafeOps tool. Cancels a pending action owned by the configured user; a canceled action cannot be confirmed later and no restart is performed.", map[string]any{"type": "object", "required": []string{"approval_id"}, "additionalProperties": false, "properties": map[string]any{"approval_id": map[string]string{"type": "string"}}}),
 		tool("action_status", "Read-only SafeOps tool. Returns the status of a pending or completed approval owned by the configured user without executing the action.", map[string]any{"type": "object", "required": []string{"approval_id"}, "additionalProperties": false, "properties": map[string]any{"approval_id": map[string]string{"type": "string"}}}),
+		tool("request_group_restart", "Mutable SafeOps maintenance tool. Creates a pending approval to restart a configured group in configured order; it never accepts raw unit names, container names, paths, or commands.", map[string]any{"type": "object", "required": []string{"group", "reason"}, "additionalProperties": false, "properties": map[string]any{"group": map[string]string{"type": "string"}, "reason": map[string]string{"type": "string"}}}),
+		tool("rotate_configured_logs", "Mutable SafeOps maintenance tool. Rotates only log paths configured for service or container aliases. With dry_run true it simulates immediately; otherwise it creates an approval.", map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"resource": map[string]string{"type": "string"}, "dry_run": map[string]string{"type": "boolean"}, "reason": map[string]string{"type": "string"}}}),
+		tool("cleanup_application_cache", "Mutable SafeOps maintenance tool. Cleans only configured application cache aliases within configured age, size, and timeout limits. With dry_run true it simulates immediately; otherwise it creates an approval.", map[string]any{"type": "object", "required": []string{"resource"}, "additionalProperties": false, "properties": map[string]any{"resource": map[string]string{"type": "string"}, "dry_run": map[string]string{"type": "boolean"}, "reason": map[string]string{"type": "string"}}}),
+		tool("remove_expired_safeops_records", "Mutable SafeOps maintenance tool. Removes old audit and approval records only through configured retention and minimum-record limits. With dry_run true it simulates immediately; otherwise it creates an approval.", map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"max_age": map[string]string{"type": "string"}, "min_records": map[string]string{"type": "integer"}, "dry_run": map[string]string{"type": "boolean"}, "reason": map[string]string{"type": "string"}}}),
+		tool("reset_resource_failure_state", "Mutable SafeOps maintenance tool. Resets systemd failed state for a configured service alias only. Containers return not_applicable; use request_container_restart for container remediation.", map[string]any{"type": "object", "required": []string{"resource"}, "additionalProperties": false, "properties": map[string]any{"resource": map[string]string{"type": "string"}, "dry_run": map[string]string{"type": "boolean"}, "reason": map[string]string{"type": "string"}}}),
+		tool("request_host_reboot", "Critical SafeOps maintenance tool. Creates a pending approval to reboot the host only when host_reboot is enabled, no mutable operation is in progress, and the configured user is allowed.", map[string]any{"type": "object", "required": []string{"reason"}, "additionalProperties": false, "properties": map[string]any{"reason": map[string]string{"type": "string"}, "delay": map[string]string{"type": "string"}}}),
 	}
 	if podmanEnabled {
 		defs = append(defs,
