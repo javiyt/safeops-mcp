@@ -117,6 +117,93 @@ func TestValidateRejectsPermissionAndHealthcheckLimitErrors(t *testing.T) {
 	}
 }
 
+func TestValidatePodmanConfiguration(t *testing.T) {
+	cfg := validConfig()
+	cfg.Podman = PodmanConfig{Enabled: true, Binary: "/usr/bin/podman", Mode: "rootless", SystemdScope: "user"}
+	cfg.Containers = map[string]ContainerConfig{
+		"container-alpha": {
+			ContainerName: "app-alpha-container",
+			Management:    "podman",
+			Permissions:   PermissionsConfig{Status: "allow", Logs: "allow", Restart: "confirm"},
+			Logs:          ContainerLogsConfig{MaxLines: 100},
+			Health:        ContainerHealthConfig{RequireHealthyAfterRestart: true, Attempts: 3, Interval: Duration(time.Second)},
+		},
+		"workload-alpha": {
+			ContainerName: "worker-alpha-container",
+			Management:    "quadlet",
+			QuadletUnit:   "worker-alpha.service",
+			Permissions:   PermissionsConfig{Status: "allow", Logs: "allow", Restart: "confirm"},
+		},
+	}
+	if err := Validate(cfg); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
+func TestValidateRejectsInvalidPodmanConfiguration(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(*Config)
+	}{
+		{"disabled with containers", func(cfg *Config) {
+			cfg.Containers = map[string]ContainerConfig{"container-alpha": {ContainerName: "app-alpha-container", Management: "podman"}}
+		}},
+		{"relative binary", func(cfg *Config) {
+			enablePodmanForTest(cfg)
+			cfg.Podman.Binary = "podman"
+		}},
+		{"unknown mode", func(cfg *Config) {
+			enablePodmanForTest(cfg)
+			cfg.Podman.Mode = "free"
+		}},
+		{"ambiguous alias", func(cfg *Config) {
+			enablePodmanForTest(cfg)
+			cfg.Containers["service-alpha"] = cfg.Containers["container-alpha"]
+		}},
+		{"container starts with dash", func(cfg *Config) {
+			enablePodmanForTest(cfg)
+			item := cfg.Containers["container-alpha"]
+			item.ContainerName = "-bad"
+			cfg.Containers["container-alpha"] = item
+		}},
+		{"quadlet missing unit", func(cfg *Config) {
+			enablePodmanForTest(cfg)
+			item := cfg.Containers["container-alpha"]
+			item.Management = "quadlet"
+			item.QuadletUnit = ""
+			cfg.Containers["container-alpha"] = item
+		}},
+		{"restart allow", func(cfg *Config) {
+			enablePodmanForTest(cfg)
+			item := cfg.Containers["container-alpha"]
+			item.Permissions.Restart = "allow"
+			cfg.Containers["container-alpha"] = item
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := validConfig()
+			tc.mutate(&cfg)
+			if err := Validate(cfg); err == nil {
+				t.Fatal("Validate() error = nil, want error")
+			}
+		})
+	}
+}
+
+func enablePodmanForTest(cfg *Config) {
+	cfg.Podman = PodmanConfig{Enabled: true, Binary: "/usr/bin/podman", Mode: "rootless", SystemdScope: "user"}
+	cfg.Containers = map[string]ContainerConfig{
+		"container-alpha": {
+			ContainerName: "app-alpha-container",
+			Management:    "podman",
+			Permissions:   PermissionsConfig{Status: "allow", Logs: "allow", Restart: "confirm"},
+			Logs:          ContainerLogsConfig{MaxLines: 100},
+			Health:        ContainerHealthConfig{Attempts: 3, Interval: Duration(time.Second)},
+		},
+	}
+}
+
 func validConfig() Config {
 	return Config{
 		Server:   ServerConfig{Name: "host-alpha"},

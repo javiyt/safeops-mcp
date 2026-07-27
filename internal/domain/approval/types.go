@@ -19,6 +19,9 @@ type Approval struct {
 	UserID               string
 	Tool                 string
 	Action               string
+	ResourceKind         string
+	ResourceAlias        string
+	OperationID          string
 	NormalizedArguments  string
 	ArgumentsHash        string
 	ConfirmationCodeHash string

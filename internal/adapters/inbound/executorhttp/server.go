@@ -51,6 +51,10 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	mux.HandleFunc("GET /v1/services/{alias}/status", s.handleServiceStatus)
 	mux.HandleFunc("POST /v1/services/logs", s.handleServiceLogs)
 	mux.HandleFunc("POST /v1/services/restart", s.handleRestartService)
+	mux.HandleFunc("GET /v1/containers", s.handleListContainers)
+	mux.HandleFunc("GET /v1/containers/{alias}/status", s.handleContainerStatus)
+	mux.HandleFunc("POST /v1/containers/logs", s.handleContainerLogs)
+	mux.HandleFunc("POST /v1/containers/restart", s.handleRestartContainer)
 	s.server = &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	go func() {
 		<-ctx.Done()
@@ -87,7 +91,7 @@ func (s *Server) handleServiceStatus(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleServiceLogs(w http.ResponseWriter, r *http.Request) {
 	var req ports.ServiceLogsRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeStrict(w, r, &req); err != nil {
 		writeJSON(w, nil, err)
 		return
 	}
@@ -97,12 +101,49 @@ func (s *Server) handleServiceLogs(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleRestartService(w http.ResponseWriter, r *http.Request) {
 	var req ports.RestartServiceRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeStrict(w, r, &req); err != nil {
 		writeJSON(w, nil, err)
 		return
 	}
 	out, err := s.Backend.RestartService(r.Context(), req)
 	writeJSON(w, out, err)
+}
+
+func (s *Server) handleListContainers(w http.ResponseWriter, r *http.Request) {
+	out, err := s.Backend.ListContainers(r.Context())
+	writeJSON(w, map[string]any{"containers": out}, err)
+}
+
+func (s *Server) handleContainerStatus(w http.ResponseWriter, r *http.Request) {
+	out, err := s.Backend.ContainerStatus(r.Context(), r.PathValue("alias"))
+	writeJSON(w, out, err)
+}
+
+func (s *Server) handleContainerLogs(w http.ResponseWriter, r *http.Request) {
+	var req ports.ContainerLogsRequest
+	if err := decodeStrict(w, r, &req); err != nil {
+		writeJSON(w, nil, err)
+		return
+	}
+	out, err := s.Backend.ContainerLogs(r.Context(), req)
+	writeJSON(w, out, err)
+}
+
+func (s *Server) handleRestartContainer(w http.ResponseWriter, r *http.Request) {
+	var req ports.RestartContainerRequest
+	if err := decodeStrict(w, r, &req); err != nil {
+		writeJSON(w, nil, err)
+		return
+	}
+	out, err := s.Backend.RestartContainer(r.Context(), req)
+	writeJSON(w, out, err)
+}
+
+func decodeStrict(w http.ResponseWriter, r *http.Request, out any) error {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	return dec.Decode(out)
 }
 
 func writeJSON(w http.ResponseWriter, value any, err error) {

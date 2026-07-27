@@ -29,3 +29,6 @@ jobs:
       - name: Forbidden execution patterns
         run: |
           ! grep -RInE --exclude-dir=.git 's[h][[:space:]]+-c|b[a]sh[[:space:]]+-c|e[v]al|exec\.Command\("s[h]"|exec\.Command\("b[a]sh"|NOPASSWD:[[:space:]]*ALL' .
+      - name: Forbidden container operations
+        run: |
+          ! grep -RInE --include='*.go' --include='*.yml' --include='*.yaml' --exclude-dir=.git 'podman[[:space:]]+(exec|rm|rmi|prune|pull|run|create|generate|kube)|/run/podman/podman\.sock|/run/user/.*/podman/podman\.sock|D[O]CKER_HOST|C[O]NTAINER_HOST' .

@@ -135,6 +135,26 @@ func TestAuditRepository(t *testing.T) {
 	}
 }
 
+func TestOperationLocks(t *testing.T) {
+	store := migratedStore(t)
+	ctx := context.Background()
+	if err := store.AcquireOperationLock(ctx, "container", "container-alpha", "op_1", time.Now().Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AcquireOperationLock(ctx, "container", "container-alpha", "op_2", time.Now().Add(time.Minute)); err == nil {
+		t.Fatal("AcquireOperationLock() error = nil, want conflict")
+	}
+	if err := store.ReleaseOperationLock(ctx, "container", "container-alpha", "op_1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AcquireOperationLock(ctx, "container", "container-alpha", "op_2", time.Now().Add(-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AcquireOperationLock(ctx, "container", "container-alpha", "op_3", time.Now().Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func migratedStore(t *testing.T) *Store {
 	t.Helper()
 	store, err := Open(t.TempDir() + "/safeops.db")

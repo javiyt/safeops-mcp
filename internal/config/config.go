@@ -15,14 +15,16 @@ import (
 )
 
 type Config struct {
-	Server     ServerConfig             `yaml:"server"`
-	Identity   IdentityConfig           `yaml:"identity"`
-	Database   DatabaseConfig           `yaml:"database"`
-	Socket     SocketConfig             `yaml:"socket"`
-	Policies   PoliciesConfig           `yaml:"policies"`
-	Limits     LimitsConfig             `yaml:"limits"`
-	Filesystem FilesystemConfig         `yaml:"filesystem"`
-	Services   map[string]ServiceConfig `yaml:"services"`
+	Server     ServerConfig               `yaml:"server"`
+	Identity   IdentityConfig             `yaml:"identity"`
+	Database   DatabaseConfig             `yaml:"database"`
+	Socket     SocketConfig               `yaml:"socket"`
+	Policies   PoliciesConfig             `yaml:"policies"`
+	Limits     LimitsConfig               `yaml:"limits"`
+	Filesystem FilesystemConfig           `yaml:"filesystem"`
+	Services   map[string]ServiceConfig   `yaml:"services"`
+	Podman     PodmanConfig               `yaml:"podman"`
+	Containers map[string]ContainerConfig `yaml:"containers"`
 }
 
 type ServerConfig struct {
@@ -82,6 +84,32 @@ type HealthcheckConfig struct {
 	Timeout  Duration `yaml:"timeout"`
 	Attempts int      `yaml:"attempts"`
 	Interval Duration `yaml:"interval"`
+}
+
+type PodmanConfig struct {
+	Enabled      bool   `yaml:"enabled"`
+	Binary       string `yaml:"binary"`
+	Mode         string `yaml:"mode"`
+	SystemdScope string `yaml:"systemd_scope"`
+}
+
+type ContainerConfig struct {
+	ContainerName string                `yaml:"container_name"`
+	Management    string                `yaml:"management"`
+	QuadletUnit   string                `yaml:"quadlet_unit"`
+	Permissions   PermissionsConfig     `yaml:"permissions"`
+	Logs          ContainerLogsConfig   `yaml:"logs"`
+	Health        ContainerHealthConfig `yaml:"health"`
+}
+
+type ContainerLogsConfig struct {
+	MaxLines int `yaml:"max_lines"`
+}
+
+type ContainerHealthConfig struct {
+	RequireHealthyAfterRestart bool     `yaml:"require_healthy_after_restart"`
+	Attempts                   int      `yaml:"attempts"`
+	Interval                   Duration `yaml:"interval"`
 }
 
 type Duration time.Duration
@@ -169,6 +197,11 @@ func Validate(cfg Config) error {
 			errs = append(errs, fmt.Errorf("filesystem.disk_paths[%q].path must be absolute", alias))
 		}
 	}
+	for alias := range cfg.Services {
+		if _, ok := cfg.Containers[alias]; ok {
+			errs = append(errs, fmt.Errorf("alias %q is ambiguous between services and containers", alias))
+		}
+	}
 	for alias, svc := range cfg.Services {
 		if !validAlias(alias) {
 			errs = append(errs, fmt.Errorf("services[%q] has an invalid alias", alias))
@@ -183,6 +216,7 @@ func Validate(cfg Config) error {
 			validateHealthcheck(&errs, alias, *svc.Healthcheck, cfg.Limits.MaxHealthcheckAttempts)
 		}
 	}
+	validatePodman(&errs, cfg)
 	return errors.Join(errs...)
 }
 
@@ -192,6 +226,10 @@ func validAlias(alias string) bool {
 
 func validUnit(unit string) bool {
 	return regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.@-]*\.service$`).MatchString(unit)
+}
+
+func validContainerName(name string) bool {
+	return regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$`).MatchString(name)
 }
 
 func validatePermission(errs *[]error, alias, name, value string, restart bool) {
@@ -206,6 +244,83 @@ func validatePermission(errs *[]error, alias, name, value string, restart bool) 
 		}
 	default:
 		*errs = append(*errs, fmt.Errorf("services[%q].permissions.%s is unknown", alias, name))
+	}
+}
+
+func validatePodman(errs *[]error, cfg Config) {
+	if !cfg.Podman.Enabled {
+		if len(cfg.Containers) > 0 || cfg.Podman.Binary != "" || cfg.Podman.Mode != "" || cfg.Podman.SystemdScope != "" {
+			*errs = append(*errs, errors.New("podman configuration is present while podman.enabled is false"))
+		}
+		return
+	}
+	if !filepath.IsAbs(cfg.Podman.Binary) {
+		*errs = append(*errs, errors.New("podman.binary must be absolute when podman is enabled"))
+	}
+	switch cfg.Podman.Mode {
+	case "rootless", "system":
+	default:
+		*errs = append(*errs, errors.New("podman.mode must be rootless or system"))
+	}
+	switch cfg.Podman.SystemdScope {
+	case "", "user", "system":
+	default:
+		*errs = append(*errs, errors.New("podman.systemd_scope must be user or system"))
+	}
+	for alias, ctr := range cfg.Containers {
+		if !validAlias(alias) {
+			*errs = append(*errs, fmt.Errorf("containers[%q] has an invalid alias", alias))
+		}
+		if !validContainerName(ctr.ContainerName) {
+			*errs = append(*errs, fmt.Errorf("containers[%q].container_name is invalid", alias))
+		}
+		switch ctr.Management {
+		case "podman":
+		case "quadlet":
+			if !validUnit(ctr.QuadletUnit) {
+				*errs = append(*errs, fmt.Errorf("containers[%q].quadlet_unit is invalid", alias))
+			}
+		default:
+			*errs = append(*errs, fmt.Errorf("containers[%q].management is unknown", alias))
+		}
+		validateContainerPermission(errs, alias, "status", ctr.Permissions.Status, false)
+		validateContainerPermission(errs, alias, "logs", ctr.Permissions.Logs, false)
+		validateContainerPermission(errs, alias, "restart", ctr.Permissions.Restart, true)
+		maxLines := ctr.Logs.MaxLines
+		if maxLines == 0 {
+			maxLines = cfg.Limits.MaxLogLines
+		}
+		if maxLines <= 0 || maxLines > cfg.Limits.MaxLogLines {
+			*errs = append(*errs, fmt.Errorf("containers[%q].logs.max_lines must be between 1 and limits.max_log_lines", alias))
+		}
+		attempts := ctr.Health.Attempts
+		if attempts == 0 {
+			attempts = cfg.Limits.MaxHealthcheckAttempts
+		}
+		if attempts <= 0 || attempts > cfg.Limits.MaxHealthcheckAttempts {
+			*errs = append(*errs, fmt.Errorf("containers[%q].health.attempts is outside configured limits", alias))
+		}
+		if ctr.Health.Interval.Std() < 0 {
+			*errs = append(*errs, fmt.Errorf("containers[%q].health.interval must be positive", alias))
+		}
+		if ctr.Permissions.Status == "deny" && ctr.Permissions.Logs == "deny" && ctr.Permissions.Restart == "deny" {
+			*errs = append(*errs, fmt.Errorf("containers[%q] denies all operations without a documented reason", alias))
+		}
+	}
+}
+
+func validateContainerPermission(errs *[]error, alias, name, value string, restart bool) {
+	switch value {
+	case "allow", "deny":
+		if restart && value == "allow" {
+			*errs = append(*errs, fmt.Errorf("containers[%q].permissions.restart must be confirm or deny", alias))
+		}
+	case "confirm":
+		if !restart {
+			*errs = append(*errs, fmt.Errorf("containers[%q].permissions.%s cannot be confirm", alias, name))
+		}
+	default:
+		*errs = append(*errs, fmt.Errorf("containers[%q].permissions.%s is unknown", alias, name))
 	}
 }
 

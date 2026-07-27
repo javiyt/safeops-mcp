@@ -109,6 +109,7 @@ func testBackend() ExecutorBackend {
 		Systemd:     &fakeSystemd{},
 		Journal:     fakeJournal{},
 		Healthcheck: fakeHealthcheck{},
+		Podman:      fakePodman{},
 	}
 }
 
@@ -136,6 +137,14 @@ func (s *fakeSystemd) Restart(context.Context, string) error {
 	return s.err
 }
 
+func (s *fakeSystemd) StatusWithScope(ctx context.Context, alias, unit, scope string) (service.Status, error) {
+	return s.Status(ctx, alias, unit)
+}
+
+func (s *fakeSystemd) RestartWithScope(ctx context.Context, unit, scope string) error {
+	return s.Restart(ctx, unit)
+}
+
 type fakeJournal struct {
 	err error
 }
@@ -151,4 +160,20 @@ type fakeHealthcheck struct{}
 
 func (fakeHealthcheck) Check(context.Context, string, time.Duration, int, time.Duration) (bool, int) {
 	return true, 1
+}
+
+type fakePodman struct{}
+
+func (fakePodman) InspectContainer(context.Context, string, string, string) (ports.ContainerStatus, error) {
+	return ports.ContainerStatus{Exists: true, State: "running", Health: "healthy"}, nil
+}
+func (fakePodman) Logs(context.Context, string, int, string) ([]ports.ContainerLogEntry, bool, error) {
+	return []ports.ContainerLogEntry{{Message: "ok"}}, false, nil
+}
+func (fakePodman) Restart(context.Context, string) error { return nil }
+func (fakePodman) WaitForRunning(context.Context, string, string, string, int, time.Duration) (ports.ContainerStatus, int, error) {
+	return ports.ContainerStatus{Exists: true, State: "running", Health: "healthy"}, 1, nil
+}
+func (fakePodman) WaitForHealth(context.Context, string, string, string, int, time.Duration) (string, int, error) {
+	return "healthy", 1, nil
 }

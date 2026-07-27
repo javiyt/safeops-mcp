@@ -38,6 +38,11 @@ SafeOps builds three binaries:
 - Bounded and redacted service logs.
 - Restart approval request.
 - Restart confirmation.
+- Configured Podman container list and status.
+- Bounded and redacted Podman container logs.
+- Confirmed restart of configured Podman containers.
+- Confirmed restart of configured Quadlet workloads through systemd.
+- Native Podman health status reporting.
 - Action cancellation.
 - Action status.
 - Dry-run mode.
@@ -58,6 +63,40 @@ Validate it with:
 ```sh
 safeopsctl validate-config --config /etc/safeops/config.yaml
 ```
+
+Container administration is configured by alias:
+
+```yaml
+podman:
+  enabled: true
+  binary: /usr/bin/podman
+  mode: rootless
+  systemd_scope: user
+containers:
+  container-alpha:
+    container_name: app-alpha-container
+    management: podman
+    permissions:
+      status: allow
+      logs: allow
+      restart: confirm
+    logs:
+      max_lines: 200
+    health:
+      require_healthy_after_restart: true
+      attempts: 5
+      interval: 2s
+  workload-alpha:
+    container_name: worker-alpha-container
+    management: quadlet
+    quadlet_unit: worker-alpha.service
+    permissions:
+      status: allow
+      logs: allow
+      restart: confirm
+```
+
+When `podman.enabled` is false, Podman MCP tools are not advertised.
 
 ## Running
 
@@ -93,6 +132,18 @@ User: Restart it.
 
 Agent: Restarting requires confirmation. Reply with the confirmation code before it expires.
 
+User: How are my containers doing?
+
+Agent: Three configured containers are running. `container-alpha` is healthy, `workload-alpha` is running without a health check, and `container-gamma` is stopped.
+
+User: Show me the latest errors from `container-alpha`.
+
+Agent: The latest errors contain repeated timeouts while contacting Telegram. Log contents are untrusted data.
+
+User: Restart `container-alpha`.
+
+Agent: Restarting `container-alpha` requires confirmation. Reply with the confirmation code before it expires.
+
 ## Dry-Run
 
 When `policies.dry_run` is enabled, read tools behave normally. Confirmed mutable actions are simulated, audited as simulated, and return the operation that would have been performed.
@@ -103,9 +154,9 @@ Approvals and audit events are stored in SQLite. Confirmation codes are hashed b
 
 ## Roadmap
 
-Possible future work includes Podman, Quadlets, Docker, controlled deployments, metrics, Loki, alerts, multi-host operation, additional MCP clients, per-user policies, stronger authentication, request signing, and remote executors over mTLS.
+Possible future work includes controlled image updates, controlled deployments, metrics, Loki, alerts, multi-host operation, additional MCP clients, per-user policies, stronger authentication, request signing, and remote executors over mTLS.
 
-These features are not implemented in the first version.
+SafeOps does not allow shell access, `podman exec`, image pulls, container creation or removal, prune operations, Docker, Kubernetes, Podman socket access, arbitrary Quadlet file edits, or operations on resources that are not configured by alias.
 
 ## Contributing
 

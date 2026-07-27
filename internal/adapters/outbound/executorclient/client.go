@@ -60,6 +60,28 @@ func (c Client) RestartService(ctx context.Context, req ports.RestartServiceRequ
 	return out, c.post(ctx, "/v1/services/restart", req, &out)
 }
 
+func (c Client) ListContainers(ctx context.Context) ([]ports.ContainerSummary, error) {
+	var out struct {
+		Containers []ports.ContainerSummary `json:"containers"`
+	}
+	return out.Containers, c.get(ctx, "/v1/containers", &out)
+}
+
+func (c Client) ContainerStatus(ctx context.Context, alias string) (ports.ContainerStatus, error) {
+	var out ports.ContainerStatus
+	return out, c.get(ctx, "/v1/containers/"+alias+"/status", &out)
+}
+
+func (c Client) ContainerLogs(ctx context.Context, req ports.ContainerLogsRequest) (ports.ContainerLogsResponse, error) {
+	var out ports.ContainerLogsResponse
+	return out, c.post(ctx, "/v1/containers/logs", req, &out)
+}
+
+func (c Client) RestartContainer(ctx context.Context, req ports.RestartContainerRequest) (ports.RestartContainerResponse, error) {
+	var out ports.RestartContainerResponse
+	return out, c.post(ctx, "/v1/containers/restart", req, &out)
+}
+
 func (c Client) get(ctx context.Context, path string, out any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://unix"+path, nil)
 	if err != nil {
