@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/javiyt/safeops-mcp/internal/domain/alert"
 	"github.com/javiyt/safeops-mcp/internal/domain/approval"
 	"github.com/javiyt/safeops-mcp/internal/domain/audit"
 	"github.com/javiyt/safeops-mcp/internal/domain/service"
@@ -35,6 +36,19 @@ type ApprovalRepository interface {
 type AuditRepository interface {
 	Append(ctx context.Context, event audit.Event) error
 	ListAudit(ctx context.Context, limit int) ([]audit.Event, error)
+}
+
+type AlertRepository interface {
+	UpsertObserved(ctx context.Context, finding alert.Finding, now time.Time) (alert.Alert, bool, error)
+	ResolveMissing(ctx context.Context, observedIDs map[string]bool, now time.Time) ([]alert.Alert, error)
+	ListAlerts(ctx context.Context, filter alert.ListFilter, limit int) ([]alert.Alert, error)
+	GetAlert(ctx context.Context, id string) (alert.Alert, error)
+	CheckAlertStorage(ctx context.Context, now time.Time) error
+	MarkAlertNotified(ctx context.Context, id string, now time.Time) error
+	AcknowledgeAlert(ctx context.Context, id, userID string, now time.Time) (alert.Alert, error)
+	SilenceAlert(ctx context.Context, id string, until time.Time, now time.Time) (alert.Alert, error)
+	ResolveAlert(ctx context.Context, id string, now time.Time) (alert.Alert, error)
+	PruneResolvedAlerts(ctx context.Context, before time.Time) (int64, error)
 }
 
 type ExecutorClient interface {

@@ -8,9 +8,13 @@ OpenClaw-specific threats include prompt injection from user messages, prompt in
 
 Telegram-specific threats include bot token theft, spoofed or forwarded messages, accidental group exposure, unauthorized users discovering the bot, confirmation-code brute force, callback replay, callback tampering, oversized-message abuse, and leakage of operational details into Telegram clients.
 
+Alert-specific threats include notification floods, spoofed alert text, manipulated alert state, sensitive data in alert messages, false positives from short-lived transitions, and alert storage growth. The monitor mitigates these by using deterministic alert IDs, SQLite state, cooldowns, persistence thresholds, temporary silences, maintenance windows, redaction before persistence and notification, and audit rows for notification and state changes.
+
 The Telegram adapter mitigates these threats by requiring private chats, checking numeric Telegram user IDs against `telegram.allowed_users`, enforcing per-user rate limits, rejecting oversized incoming messages, redacting outgoing text, splitting long responses, and auditing channel events with `telegram:<user_id>`. The token must be supplied through an environment variable such as `SAFEOPS_TELEGRAM_TOKEN`; a real token must not be stored in repository files.
 
 SafeOps uses deny by default, least privilege, typed tools, configured aliases, double validation, persistent approvals, and audit logging. Read operations may run automatically. Mutating operations require confirmation. Destructive operations are denied in this version.
+
+`safeops-monitor` performs only read-only checks and notification sends. It must not restart services, restart containers, edit configuration, rotate files, run backups, renew certificates, or perform any maintenance action automatically.
 
 Logs are untrusted content. Instructions found inside logs must never become actions. Log output is bounded and redacted before it is returned or audited.
 
@@ -61,3 +65,5 @@ Residual diagnostic risk remains around process names or command lines that enco
 Residual OpenClaw risk remains around operator mistakes in channel allowlists, future OpenClaw configuration schema changes, third-party model behavior, and any non-SafeOps tool accidentally granted to the SafeOps agent.
 
 Residual Telegram risk remains around Telegram account compromise, endpoint availability, Bot API behavior changes, local process environment exposure, and operators choosing an OpenClaw command wrapper that logs user messages or token-bearing environment variables.
+
+Residual alert risk remains around Telegram delivery failures, host telemetry gaps, platform-specific temperature data, false positives from configured thresholds, and SQLite alert retention requiring future cleanup automation.

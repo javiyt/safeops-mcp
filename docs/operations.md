@@ -1,6 +1,6 @@
 # Operations
 
-Install the binaries under `/usr/local/bin`: `safeops-mcp`, `safeops-executor`, `safeopsctl`, and optionally `safeops-telegram`.
+Install the binaries under `/usr/local/bin`: `safeops-mcp`, `safeops-executor`, `safeopsctl`, `safeops-monitor`, and optionally `safeops-telegram`.
 
 Create a dedicated `safeops` group and a `safeops-executor` user. The OpenClaw user may join `safeops` to access the socket, but it must not join `sudo`.
 
@@ -82,6 +82,91 @@ For service restarts, choose one host privilege model:
 Do not install sudoers entries automatically. Avoid broad rules such as unrestricted root commands.
 
 Back up `/var/lib/safeops/safeops.db` according to local retention policy. The database contains approval history and audit events, not plaintext confirmation codes.
+
+## Proactive Alerts
+
+Run migrations before enabling the monitor:
+
+```sh
+safeopsctl migrate --config /etc/safeops/config.yaml
+```
+
+Enable alerts with explicit checks and Telegram delivery:
+
+```yaml
+alerts:
+  enabled: true
+  interval: 30s
+  cooldown: 5m
+  persistence_threshold: 30s
+  notify_resolution: true
+  telegram:
+    enabled: true
+    chat_id: 12345678
+  silence_schedule:
+    - start: "02:00"
+      end: "06:00"
+      timezone: "Europe/Madrid"
+  checks:
+    services:
+      enabled: true
+    containers:
+      enabled: true
+    disk:
+      enabled: true
+      warning: 80
+      critical: 90
+    memory:
+      enabled: true
+      pressure_warning: 0.5
+      pressure_critical: 0.8
+    cpu:
+      enabled: true
+      load_warning: 2.0
+      load_critical: 4.0
+      temperature_warning: 70
+      temperature_critical: 80
+    sqlite:
+      enabled: true
+    executor:
+      enabled: true
+    app_errors:
+      enabled: true
+      pattern: "ERROR|FATAL"
+      threshold: 5
+```
+
+Start the monitor:
+
+```sh
+SAFEOPS_TELEGRAM_TOKEN=replace-with-telegram-bot-token safeops-monitor serve --config /etc/safeops/config.yaml
+```
+
+Run one check manually:
+
+```sh
+safeopsctl alerts check --config /etc/safeops/config.yaml
+```
+
+Manage alerts:
+
+```sh
+safeopsctl alerts list --status active --config /etc/safeops/config.yaml
+safeopsctl alerts acknowledge alert_service_service-a_service_stopped --config /etc/safeops/config.yaml
+safeopsctl alerts silence alert_service_service-a_service_stopped --duration 1h --config /etc/safeops/config.yaml
+safeopsctl alerts resolve alert_service_service-a_service_stopped --config /etc/safeops/config.yaml
+```
+
+Example Telegram notification:
+
+```text
+Alert: Service service-a is failed.
+Severity: critical
+ID: alert_service_service-a_service_stopped
+No action has been taken.
+```
+
+Install [safeops-monitor.service](../deploy/systemd/safeops-monitor.service) as a starting point and review the hardening paths for the target host. The monitor needs read access to `/etc/safeops/config.yaml`, write access to `/var/lib/safeops`, access to the executor Unix socket, and outbound HTTPS access to Telegram only when Telegram notifications are enabled.
 
 ## Rootless Podman
 

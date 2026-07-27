@@ -25,6 +25,7 @@ func NewToolService(ctx context.Context, cfg config.Config, logger *slog.Logger)
 		Config:    cfg,
 		Executor:  executorclient.New(cfg.Socket.Path),
 		Approvals: store,
+		Alerts:    store,
 		Audit:     store,
 		Clock:     SystemClock{},
 		IDs:       CryptoIDGenerator{},

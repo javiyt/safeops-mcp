@@ -80,6 +80,9 @@ The important MCP server block is:
             "time_status",
             "configured_process_status",
             "host_health_summary",
+            "list_alerts",
+            "acknowledge_alert",
+            "silence_alert",
             "disk_status",
             "list_services",
             "service_status",
@@ -120,6 +123,9 @@ The expected tool list is:
 - `time_status`
 - `configured_process_status`
 - `host_health_summary`
+- `list_alerts`
+- `acknowledge_alert`
+- `silence_alert`
 - `disk_status`
 - `list_services`
 - `service_status`

@@ -12,6 +12,7 @@ import (
 
 	"github.com/javiyt/safeops-mcp/internal/config"
 	"github.com/javiyt/safeops-mcp/internal/domain/action"
+	"github.com/javiyt/safeops-mcp/internal/domain/alert"
 	"github.com/javiyt/safeops-mcp/internal/domain/approval"
 	"github.com/javiyt/safeops-mcp/internal/domain/audit"
 	"github.com/javiyt/safeops-mcp/internal/domain/policy"
@@ -23,6 +24,7 @@ type Service struct {
 	Config    config.Config
 	Executor  ports.ExecutorClient
 	Approvals ports.ApprovalRepository
+	Alerts    ports.AlertRepository
 	Audit     ports.AuditRepository
 	Clock     ports.Clock
 	IDs       ports.IDGenerator
@@ -65,6 +67,21 @@ type ConfirmOutput struct {
 	Health         *ports.ContainerHealthResult `json:"health,omitempty"`
 	Healthcheck    *ports.HealthcheckResult     `json:"healthcheck,omitempty"`
 	WouldRun       string                       `json:"would_run,omitempty"`
+}
+
+type ListAlertsInput struct {
+	Status   string `json:"status"`
+	Severity string `json:"severity"`
+	Limit    int    `json:"limit"`
+}
+
+type AcknowledgeAlertInput struct {
+	AlertID string `json:"alert_id"`
+}
+
+type SilenceAlertInput struct {
+	AlertID  string `json:"alert_id"`
+	Duration string `json:"duration"`
 }
 
 func (s Service) SystemStatus(ctx context.Context) (ports.SystemStatus, error) {
@@ -149,6 +166,42 @@ func (s Service) HostHealthSummary(ctx context.Context, userID string) (ports.Ho
 		err = s.auditRead(ctx, userID, "host_health_summary", "{}")
 	}
 	return out, err
+}
+
+func (s Service) ListAlerts(ctx context.Context, userID string, input ListAlertsInput) (map[string][]alert.Alert, error) {
+	items, err := s.Alerts.ListAlerts(ctx, alert.ListFilter{Status: alert.Status(input.Status), Severity: alert.Severity(input.Severity)}, input.Limit)
+	if err == nil {
+		err = s.auditRead(ctx, userID, "list_alerts", "{}")
+	}
+	return map[string][]alert.Alert{"alerts": items}, err
+}
+
+func (s Service) AcknowledgeAlert(ctx context.Context, userID string, input AcknowledgeAlertInput) (map[string]string, error) {
+	a, err := s.Alerts.AcknowledgeAlert(ctx, input.AlertID, userID, s.Clock.Now())
+	if err != nil {
+		return nil, err
+	}
+	if err := s.audit(ctx, userID, "alert_acknowledged", "acknowledge_alert", "acknowledge_alert", fmt.Sprintf(`{"alert_id":%q}`, a.ID), "read", "allow", "acknowledged", "", ""); err != nil {
+		return nil, err
+	}
+	return map[string]string{"status": string(a.Status), "message": "Alert " + a.ID + " acknowledged."}, nil
+}
+
+func (s Service) SilenceAlert(ctx context.Context, userID string, input SilenceAlertInput) (map[string]string, error) {
+	d, err := time.ParseDuration(input.Duration)
+	if err != nil || d <= 0 {
+		return nil, errors.New("duration must be a positive Go duration such as 1h")
+	}
+	now := s.Clock.Now()
+	until := now.Add(d)
+	a, err := s.Alerts.SilenceAlert(ctx, input.AlertID, until, now)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.audit(ctx, userID, "alert_silenced", "silence_alert", "silence_alert", fmt.Sprintf(`{"alert_id":%q}`, a.ID), "read", "allow", "suppressed", "", ""); err != nil {
+		return nil, err
+	}
+	return map[string]string{"status": string(a.Status), "message": fmt.Sprintf("Alert %s silenced until %s.", a.ID, until.UTC().Format(time.RFC3339))}, nil
 }
 
 func (s Service) ListServices(ctx context.Context) ([]ports.ServiceSummary, error) {
