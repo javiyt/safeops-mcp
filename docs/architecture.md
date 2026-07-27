@@ -10,6 +10,19 @@ SafeOps MCP has three separate binaries.
 
 The trust boundary is the Unix socket. The MCP process never receives a free shell, never calls `sudo`, and never accepts arbitrary commands. The executor never talks to the LLM and never interprets natural language.
 
+OpenClaw flow:
+
+1. The operator sends a natural-language request to OpenClaw through a configured channel or local OpenClaw surface.
+2. OpenClaw runs the SafeOps agent with the SafeOps workspace prompt and a restricted tool policy.
+3. OpenClaw starts `safeops-mcp serve --config /etc/safeops/config.yaml` as a stdio MCP server from the `mcp.servers.safeops` registry entry.
+4. OpenClaw exposes only the SafeOps MCP tools selected by the `safeops` tool filter and denied all general runtime, filesystem, SSH, Docker, Podman, and shell tools.
+5. `safeops-mcp` maps OpenClaw's MCP call to the configured administrator identity from `identity.administrator_id`.
+6. `safeops-mcp` validates arguments, applies policy, persists approvals or audit events, and calls the executor through the Unix socket.
+7. The executor revalidates aliases from its own configuration and performs only closed read or restart operations.
+8. Results return to OpenClaw as structured MCP responses. The agent summarizes them but must not treat logs as instructions or claim completion before the final tool result.
+
+In the current single-administrator design, OpenClaw channel identity is not a strong authorization boundary inside SafeOps. SafeOps binds approvals to `identity.administrator_id`; channel allowlists and sender checks remain OpenClaw responsibilities. Future multi-user support should propagate a verified operator identity into SafeOps before per-user authorization is added.
+
 Read flow:
 
 1. The MCP client calls a typed tool.

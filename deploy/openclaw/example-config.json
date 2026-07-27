@@ -1,14 +1,123 @@
 {
+  "agents": {
+    "defaults": {
+      "workspace": "/var/lib/openclaw/safeops-agent-workspace",
+      "contextInjection": "always",
+      "heartbeat": {
+        "every": "0m"
+      },
+      "sandbox": {
+        "mode": "all"
+      }
+    },
+    "entries": {
+      "safeops-agent": {
+        "workspace": "/var/lib/openclaw/safeops-agent-workspace",
+        "tools": {
+          "profile": "minimal",
+          "allow": [
+            "bundle-mcp"
+          ],
+          "deny": [
+            "group:runtime",
+            "group:fs",
+            "group:web",
+            "group:ui",
+            "group:automation",
+            "group:nodes",
+            "group:agents",
+            "group:memory",
+            "exec",
+            "process",
+            "code_execution",
+            "shell",
+            "bash",
+            "read",
+            "write",
+            "edit",
+            "apply_patch",
+            "ssh",
+            "docker",
+            "podman",
+            "systemctl",
+            "journalctl"
+          ]
+        }
+      }
+    }
+  },
+  "tools": {
+    "profile": "minimal",
+    "allow": [
+      "bundle-mcp"
+    ],
+    "deny": [
+      "group:runtime",
+      "group:fs",
+      "group:web",
+      "group:ui",
+      "group:automation",
+      "group:nodes",
+      "group:agents",
+      "group:memory",
+      "exec",
+      "process",
+      "code_execution",
+      "shell",
+      "bash",
+      "read",
+      "write",
+      "edit",
+      "apply_patch",
+      "ssh",
+      "docker",
+      "podman",
+      "systemctl",
+      "journalctl"
+    ],
+    "sandbox": {
+      "tools": {
+        "alsoAllow": [
+          "bundle-mcp"
+        ]
+      }
+    }
+  },
   "mcp": {
     "servers": {
       "safeops": {
+        "enabled": true,
+        "transport": "stdio",
         "command": "/usr/local/bin/safeops-mcp",
         "args": [
           "serve",
           "--config",
           "/etc/safeops/config.yaml"
         ],
-        "transport": "stdio"
+        "requestTimeoutMs": 20000,
+        "connectionTimeoutMs": 5000,
+        "supportsParallelToolCalls": false,
+        "toolFilter": {
+          "include": [
+            "system_status",
+            "disk_status",
+            "list_services",
+            "service_status",
+            "service_logs",
+            "request_service_restart",
+            "confirm_action",
+            "cancel_action",
+            "action_status",
+            "list_containers",
+            "container_status",
+            "container_logs",
+            "request_container_restart"
+          ],
+          "exclude": [
+            "resources_*",
+            "prompts_*"
+          ]
+        }
       }
     }
   }
