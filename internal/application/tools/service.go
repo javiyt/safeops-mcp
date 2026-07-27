@@ -133,7 +133,7 @@ func (s Service) requestRestart(ctx context.Context, userID, tool string, act ac
 	if err != nil {
 		return RequestRestartOutput{}, err
 	}
-	code, err := s.Codes.NewCode(4)
+	code, err := s.Codes.NewCode(s.Config.ConfirmationCodeLength())
 	if err != nil {
 		return RequestRestartOutput{}, err
 	}
@@ -153,7 +153,7 @@ func (s Service) requestRestart(ctx context.Context, userID, tool string, act ac
 		ConfirmationCodeHash: hashString(code),
 		Status:               approval.StatusPending,
 		CreatedAt:            now,
-		ExpiresAt:            now.Add(s.Config.Policies.ApprovalExpiration.Std()),
+		ExpiresAt:            now.Add(s.Config.ApprovalExpiration()),
 	}
 	if err := s.Approvals.Create(ctx, a); err != nil {
 		return RequestRestartOutput{}, err

@@ -6,6 +6,10 @@ OpenClaw is treated as unprivileged and untrusted for authorization. The LLM is 
 
 OpenClaw-specific threats include prompt injection from user messages, prompt injection from logs, malicious or misleading service output, attempts to coerce the agent into inventing aliases, attempts to use unavailable shell or filesystem tools, and identity spoofing when the channel layer is not strongly authenticated. OpenClaw configuration must therefore expose only SafeOps MCP tools, deny general runtime and filesystem tool groups, and run under a Linux user without sudo or direct container-runtime access.
 
+Telegram-specific threats include bot token theft, spoofed or forwarded messages, accidental group exposure, unauthorized users discovering the bot, confirmation-code brute force, callback replay, callback tampering, oversized-message abuse, and leakage of operational details into Telegram clients.
+
+The Telegram adapter mitigates these threats by requiring private chats, checking numeric Telegram user IDs against `telegram.allowed_users`, enforcing per-user rate limits, rejecting oversized incoming messages, redacting outgoing text, splitting long responses, and auditing channel events with `telegram:<user_id>`. The token must be supplied through an environment variable such as `SAFEOPS_TELEGRAM_TOKEN`; a real token must not be stored in repository files.
+
 SafeOps uses deny by default, least privilege, typed tools, configured aliases, double validation, persistent approvals, and audit logging. Read operations may run automatically. Mutating operations require confirmation. Destructive operations are denied in this version.
 
 Logs are untrusted content. Instructions found inside logs must never become actions. Log output is bounded and redacted before it is returned or audited.
@@ -26,11 +30,15 @@ Health checks accept only configured local URLs and apply timeouts, redirect lim
 
 Approvals are bound to the configured administrator ID, expire, store only a hash of the confirmation code, and are marked executing atomically to prevent double execution.
 
+When Telegram is enabled, `identity.administrator_id` must be `telegram:<admin_id>`. This keeps SafeOps approval ownership and mutable audit rows tied to the Telegram administrator accepted by the channel adapter. The LLM must not be allowed to choose or rewrite this identity.
+
 Generic approvals bind action type, resource kind, resource alias, normalized arguments, user identity, and dry-run-relevant security data through the arguments hash. A service approval cannot become a container action. Configuration and permissions are rechecked at confirmation time to reduce time-of-check/time-of-use risk.
 
 Additional threats considered in this iteration include Podman socket exposure, container escape after an approved restart, malicious image metadata, secrets in logs, secrets in inspect output, CLI argument injection, rootless identity mismatch, Quadlet privilege-boundary confusion, concurrent mutable actions, and configuration changes between approval and execution.
 
 Additional OpenClaw integration threats considered in this iteration include overbroad OpenClaw tool profiles, accidental MCP projection to unrelated agents, unsafe stdio wrappers around `safeops-mcp`, leakage of SafeOps config paths or logs into model context, forged confirmation codes in logs, and OpenClaw channel senders impersonating the configured administrator. The current mitigation is a dedicated SafeOps agent, a minimal OpenClaw tool profile with `bundle-mcp` added back, explicit deny lists, SafeOps-side confirmation revalidation, and manual E2E verification.
+
+Additional Telegram integration threats considered in this iteration include stolen bot tokens, incorrect allowlists, group chat exposure, repeated confirmation attempts, message replay, stale inline buttons, malicious callback data, and OpenClaw wrappers that ignore trusted channel metadata. The current mitigation is token isolation, strict allowlists, private-chat enforcement, rate limiting, callback parsing with closed verbs, SafeOps-side approval revalidation, and manual E2E verification.
 
 Audit policy:
 
@@ -41,3 +49,5 @@ Audit policy:
 Residual risk remains around incomplete secret detection, host-level misconfiguration, overly broad sudoers rules configured by an operator, and bugs in systemd or journal tooling.
 
 Residual OpenClaw risk remains around operator mistakes in channel allowlists, future OpenClaw configuration schema changes, third-party model behavior, and any non-SafeOps tool accidentally granted to the SafeOps agent.
+
+Residual Telegram risk remains around Telegram account compromise, endpoint availability, Bot API behavior changes, local process environment exposure, and operators choosing an OpenClaw command wrapper that logs user messages or token-bearing environment variables.

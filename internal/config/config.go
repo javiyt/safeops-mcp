@@ -22,6 +22,7 @@ type Config struct {
 	Policies   PoliciesConfig             `yaml:"policies"`
 	Limits     LimitsConfig               `yaml:"limits"`
 	Filesystem FilesystemConfig           `yaml:"filesystem"`
+	Telegram   TelegramConfig             `yaml:"telegram"`
 	Services   map[string]ServiceConfig   `yaml:"services"`
 	Podman     PodmanConfig               `yaml:"podman"`
 	Containers map[string]ContainerConfig `yaml:"containers"`
@@ -110,6 +111,38 @@ type ContainerHealthConfig struct {
 	RequireHealthyAfterRestart bool     `yaml:"require_healthy_after_restart"`
 	Attempts                   int      `yaml:"attempts"`
 	Interval                   Duration `yaml:"interval"`
+}
+
+type TelegramConfig struct {
+	Enabled          bool                       `yaml:"enabled"`
+	Token            string                     `yaml:"token"`
+	TokenEnv         string                     `yaml:"token_env"`
+	AllowedUsers     []int64                    `yaml:"allowed_users"`
+	AdminID          int64                      `yaml:"admin_id"`
+	RateLimit        TelegramRateLimitConfig    `yaml:"rate_limit"`
+	MessageSizeLimit int                        `yaml:"message_size_limit"`
+	Confirmation     TelegramConfirmationConfig `yaml:"confirmation"`
+	Buttons          TelegramButtonsConfig      `yaml:"buttons"`
+	OpenClaw         TelegramOpenClawConfig     `yaml:"openclaw"`
+}
+
+type TelegramRateLimitConfig struct {
+	MessagesPerMinute int `yaml:"messages_per_minute"`
+}
+
+type TelegramConfirmationConfig struct {
+	CodeLength        int `yaml:"code_length"`
+	ExpirationSeconds int `yaml:"expiration_seconds"`
+}
+
+type TelegramButtonsConfig struct {
+	Enabled bool `yaml:"enabled"`
+}
+
+type TelegramOpenClawConfig struct {
+	Command string   `yaml:"command"`
+	Args    []string `yaml:"args"`
+	Timeout Duration `yaml:"timeout"`
 }
 
 type Duration time.Duration
@@ -216,8 +249,41 @@ func Validate(cfg Config) error {
 			validateHealthcheck(&errs, alias, *svc.Healthcheck, cfg.Limits.MaxHealthcheckAttempts)
 		}
 	}
+	validateTelegram(&errs, cfg)
 	validatePodman(&errs, cfg)
 	return errors.Join(errs...)
+}
+
+func (cfg Config) TelegramToken() string {
+	if strings.TrimSpace(cfg.Telegram.Token) != "" {
+		return strings.TrimSpace(cfg.Telegram.Token)
+	}
+	envName := strings.TrimSpace(cfg.Telegram.TokenEnv)
+	if envName == "" {
+		envName = "SAFEOPS_TELEGRAM_TOKEN"
+	}
+	return strings.TrimSpace(os.Getenv(envName))
+}
+
+func (cfg Config) TelegramPrincipal() string {
+	if cfg.Telegram.AdminID <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("telegram:%d", cfg.Telegram.AdminID)
+}
+
+func (cfg Config) ConfirmationCodeLength() int {
+	if cfg.Telegram.Enabled && cfg.Telegram.Confirmation.CodeLength > 0 {
+		return cfg.Telegram.Confirmation.CodeLength
+	}
+	return 4
+}
+
+func (cfg Config) ApprovalExpiration() time.Duration {
+	if cfg.Telegram.Enabled && cfg.Telegram.Confirmation.ExpirationSeconds > 0 {
+		return time.Duration(cfg.Telegram.Confirmation.ExpirationSeconds) * time.Second
+	}
+	return cfg.Policies.ApprovalExpiration.Std()
 }
 
 func validAlias(alias string) bool {
@@ -311,6 +377,70 @@ func validatePodman(errs *[]error, cfg Config) {
 			*errs = append(*errs, fmt.Errorf("containers[%q] denies all operations without a documented reason", alias))
 		}
 	}
+}
+
+func validateTelegram(errs *[]error, cfg Config) {
+	if !cfg.Telegram.Enabled {
+		return
+	}
+	if cfg.Telegram.Token != "" {
+		*errs = append(*errs, errors.New("telegram.token must not be set in the shared configuration; use telegram.token_env or SAFEOPS_TELEGRAM_TOKEN"))
+	}
+	tokenEnv := strings.TrimSpace(cfg.Telegram.TokenEnv)
+	if tokenEnv == "" {
+		tokenEnv = "SAFEOPS_TELEGRAM_TOKEN"
+	}
+	if !validEnvName(tokenEnv) {
+		*errs = append(*errs, errors.New("telegram.token_env must be a valid environment variable name"))
+	}
+	if strings.TrimSpace(os.Getenv(tokenEnv)) == "" {
+		*errs = append(*errs, fmt.Errorf("%s must contain the Telegram bot token when telegram is enabled", tokenEnv))
+	}
+	if cfg.Telegram.AdminID <= 0 {
+		*errs = append(*errs, errors.New("telegram.admin_id must be positive"))
+	}
+	allowed := map[int64]bool{}
+	for _, id := range cfg.Telegram.AllowedUsers {
+		if id <= 0 {
+			*errs = append(*errs, errors.New("telegram.allowed_users must contain only positive numeric IDs"))
+			continue
+		}
+		if allowed[id] {
+			*errs = append(*errs, fmt.Errorf("telegram.allowed_users contains duplicate ID %d", id))
+		}
+		allowed[id] = true
+	}
+	if len(allowed) == 0 {
+		*errs = append(*errs, errors.New("telegram.allowed_users must not be empty when telegram is enabled"))
+	}
+	if cfg.Telegram.AdminID > 0 && !allowed[cfg.Telegram.AdminID] {
+		*errs = append(*errs, errors.New("telegram.admin_id must be listed in telegram.allowed_users"))
+	}
+	if cfg.Telegram.AdminID > 0 && cfg.Identity.AdministratorID != cfg.TelegramPrincipal() {
+		*errs = append(*errs, fmt.Errorf("identity.administrator_id must be %q when telegram is enabled", cfg.TelegramPrincipal()))
+	}
+	if cfg.Telegram.RateLimit.MessagesPerMinute <= 0 || cfg.Telegram.RateLimit.MessagesPerMinute > 60 {
+		*errs = append(*errs, errors.New("telegram.rate_limit.messages_per_minute must be between 1 and 60"))
+	}
+	if cfg.Telegram.MessageSizeLimit <= 0 || cfg.Telegram.MessageSizeLimit > 4096 {
+		*errs = append(*errs, errors.New("telegram.message_size_limit must be between 1 and 4096"))
+	}
+	if cfg.Telegram.Confirmation.CodeLength < 4 || cfg.Telegram.Confirmation.CodeLength > 12 {
+		*errs = append(*errs, errors.New("telegram.confirmation.code_length must be between 4 and 12"))
+	}
+	if cfg.Telegram.Confirmation.ExpirationSeconds <= 0 || cfg.Telegram.Confirmation.ExpirationSeconds > 3600 {
+		*errs = append(*errs, errors.New("telegram.confirmation.expiration_seconds must be between 1 and 3600"))
+	}
+	if strings.TrimSpace(cfg.Telegram.OpenClaw.Command) == "" {
+		*errs = append(*errs, errors.New("telegram.openclaw.command is required when telegram is enabled"))
+	}
+	if cfg.Telegram.OpenClaw.Timeout.Std() <= 0 {
+		*errs = append(*errs, errors.New("telegram.openclaw.timeout must be positive"))
+	}
+}
+
+func validEnvName(name string) bool {
+	return regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`).MatchString(name)
 }
 
 func validateContainerPermission(errs *[]error, alias, name, value string, restart bool) {

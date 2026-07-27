@@ -22,6 +22,24 @@ filesystem:
   disk_paths:
     root:
       path: /
+telegram:
+  enabled: false
+  token_env: SAFEOPS_TELEGRAM_TOKEN
+  allowed_users:
+    - 12345678
+  admin_id: 12345678
+  rate_limit:
+    messages_per_minute: 10
+  message_size_limit: 4096
+  confirmation:
+    code_length: 4
+    expiration_seconds: 300
+  buttons:
+    enabled: true
+  openclaw:
+    command: /usr/local/bin/openclaw
+    args: ["run", "--agent", "safeops-agent"]
+    timeout: 30s
 podman:
   enabled: true
   binary: /usr/bin/podman

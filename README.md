@@ -6,11 +6,12 @@ It is designed for agents such as OpenClaw that should be able to inspect a host
 
 ## Architecture
 
-SafeOps builds three binaries:
+SafeOps builds these binaries:
 
 - `safeops-mcp`: an unprivileged MCP server over stdio.
 - `safeops-executor`: a local executor that listens on a restricted Unix socket.
 - `safeopsctl`: an operator CLI for validation, migrations, approvals, and audit listing.
+- `safeops-telegram`: an optional private Telegram channel adapter for OpenClaw.
 
 `safeops-mcp` validates tool inputs, applies policy, manages approvals, redacts output, writes audit records, and calls `safeops-executor`. The executor independently validates aliases and executes only predefined operations.
 
@@ -49,6 +50,7 @@ SafeOps builds three binaries:
 - SQLite audit and approval storage.
 - Unix-socket executor protocol.
 - Configuration validation CLI.
+- Optional private Telegram bot channel with allowlisted users, rate limiting, message splitting, and confirmation buttons.
 
 ## Configuration
 
@@ -104,6 +106,33 @@ When `podman.enabled` is false, Podman MCP tools are not advertised.
 
 `container_status` uses `podman inspect`, but returns only selected status fields. It does not return environment variables, command arguments, full labels, mounts, credentials, or Quadlet file contents.
 
+Telegram is optional and disabled by default. Enable it only after configuring a single administrator identity:
+
+```yaml
+identity:
+  administrator_id: telegram:12345678
+telegram:
+  enabled: true
+  token_env: SAFEOPS_TELEGRAM_TOKEN
+  allowed_users:
+    - 12345678
+  admin_id: 12345678
+  rate_limit:
+    messages_per_minute: 10
+  message_size_limit: 4096
+  confirmation:
+    code_length: 4
+    expiration_seconds: 300
+  buttons:
+    enabled: true
+  openclaw:
+    command: /usr/local/bin/openclaw
+    args: ["run", "--agent", "safeops-agent"]
+    timeout: 30s
+```
+
+The Telegram token must come from an environment variable, not from the shared configuration file. See `docs/telegram.md`.
+
 ## Running
 
 Run the executor on the host:
@@ -118,6 +147,12 @@ Run the MCP server through OpenClaw or manually over stdio:
 safeops-mcp serve --config /etc/safeops/config.yaml
 ```
 
+Run the Telegram adapter after OpenClaw and the executor are configured:
+
+```sh
+SAFEOPS_TELEGRAM_TOKEN=replace-with-telegram-bot-token safeops-telegram serve --config /etc/safeops/config.yaml
+```
+
 ## OpenClaw
 
 SafeOps can be registered as an OpenClaw-managed stdio MCP server. See `docs/openclaw.md`, `deploy/openclaw/example-config.json`, `prompts/openclaw-agent.md`, and `deploy/openclaw/e2e-checklist.md`.
@@ -125,6 +160,8 @@ SafeOps can be registered as an OpenClaw-managed stdio MCP server. See `docs/ope
 OpenClaw should not receive shell access, `sudo`, `systemctl`, `journalctl`, Docker or Podman sockets, secret directories, `.env` files, or broad host filesystem mounts.
 
 The OpenClaw configuration must expose only SafeOps MCP tools through `bundle-mcp`, deny runtime and filesystem tool groups, and use the SafeOps agent prompt from `prompts/openclaw-agent.md`.
+
+SafeOps can also expose OpenClaw through a private Telegram bot. See `docs/telegram.md`. The Telegram adapter accepts only private chats from allowlisted numeric Telegram users and maps the administrator to `telegram:<user_id>` for auditing and approvals.
 
 ## Example Conversation
 

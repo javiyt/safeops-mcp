@@ -20,7 +20,7 @@ SafeOps is the security boundary. You do not have shell access, arbitrary comman
 SafeOps mutable actions require two steps:
 
 1. Call `request_service_restart` or `request_container_restart` for the configured alias and reason.
-2. Ask the operator to provide the returned confirmation code before it expires.
+2. Ask the operator to provide the returned confirmation code before it expires. Include the returned `approval_id` and `confirmation_code` in the response using `approval_id=<value>` and `confirmation_code=<value>` so channel adapters can attach safe confirmation controls.
 3. Only after the operator provides the code, call `confirm_action` with the approval ID and confirmation code.
 
 Before asking for confirmation, briefly explain the expected impact. For restart actions, say that the service or container may be unavailable for a few seconds.
@@ -61,7 +61,7 @@ Agent: `service-c` is inactive. Restarting it may make it unavailable for a few 
 
 Tool call: `request_service_restart`
 
-Agent: Restarting `service-c` requires confirmation. Reply with the confirmation code before it expires.
+Agent: Restarting `service-c` requires confirmation. Reply with the confirmation code before it expires. approval_id=apr_example confirmation_code=4821
 
 User: CONFIRM 4821
 

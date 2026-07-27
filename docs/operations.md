@@ -1,6 +1,6 @@
 # Operations
 
-Install the three binaries under `/usr/local/bin`: `safeops-mcp`, `safeops-executor`, and `safeopsctl`.
+Install the binaries under `/usr/local/bin`: `safeops-mcp`, `safeops-executor`, `safeopsctl`, and optionally `safeops-telegram`.
 
 Create a dedicated `safeops` group and a `safeops-executor` user. The OpenClaw user may join `safeops` to access the socket, but it must not join `sudo`.
 
@@ -82,3 +82,92 @@ Common errors:
 - Permission denied from Podman: check rootless ownership and avoid `sudo podman`.
 
 Dry-run can be tested by setting `policies.dry_run: true`. Read tools still call Podman, but confirmed restarts are simulated and audited as simulated.
+
+## Telegram Channel
+
+Telegram support is optional. Enable it only after the executor and OpenClaw are working locally.
+
+Store the bot token outside the repository:
+
+```sh
+install -d -m 0750 /etc/safeops/secrets
+printf '%s\n' 'SAFEOPS_TELEGRAM_TOKEN=replace-with-telegram-bot-token' > /etc/safeops/secrets/telegram.env
+chmod 0600 /etc/safeops/secrets/telegram.env
+```
+
+Configure the single administrator by numeric Telegram ID:
+
+```yaml
+identity:
+  administrator_id: telegram:12345678
+telegram:
+  enabled: true
+  token_env: SAFEOPS_TELEGRAM_TOKEN
+  allowed_users:
+    - 12345678
+  admin_id: 12345678
+  rate_limit:
+    messages_per_minute: 10
+  message_size_limit: 4096
+  confirmation:
+    code_length: 4
+    expiration_seconds: 300
+  buttons:
+    enabled: true
+  openclaw:
+    command: /usr/local/bin/openclaw
+    args: ["run", "--agent", "safeops-agent"]
+    timeout: 30s
+```
+
+Validate with the token loaded:
+
+```sh
+set -a
+. /etc/safeops/secrets/telegram.env
+set +a
+safeopsctl validate-config --config /etc/safeops/config.yaml
+```
+
+Run the adapter:
+
+```sh
+set -a
+. /etc/safeops/secrets/telegram.env
+set +a
+safeops-telegram serve --config /etc/safeops/config.yaml
+```
+
+Recommended service shape:
+
+```ini
+[Unit]
+Description=SafeOps Telegram adapter
+After=network-online.target safeops-executor.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/safeops/secrets/telegram.env
+ExecStart=/usr/local/bin/safeops-telegram serve --config /etc/safeops/config.yaml
+Restart=on-failure
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/etc/safeops/config.yaml
+ReadWritePaths=/var/lib/safeops
+
+[Install]
+WantedBy=multi-user.target
+```
+
+To add or remove an authorized Telegram user in this phase, edit `telegram.allowed_users`, keep `telegram.admin_id` as the single administrator, validate config, and restart `safeops-telegram`. Multi-user roles are intentionally deferred.
+
+Audit channel events:
+
+```sh
+safeopsctl audit list --limit 50 --config /etc/safeops/config.yaml
+```
+
+Telegram channel events use component `safeops-telegram` and user IDs such as `telegram:12345678`. Mutable SafeOps events are still produced by `safeops-mcp` and are tied to the configured administrator identity.
