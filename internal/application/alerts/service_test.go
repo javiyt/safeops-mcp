@@ -259,6 +259,18 @@ func (f *fakeExecutor) UpdateApplication(context.Context, ports.UpdateApplicatio
 func (f *fakeExecutor) RollbackApplication(context.Context, ports.RollbackApplicationRequest) (ports.ApplicationDeploymentResponse, error) {
 	return ports.ApplicationDeploymentResponse{}, nil
 }
+func (f *fakeExecutor) CreateBackup(context.Context, ports.CreateBackupRequest) (ports.BackupExecutionResponse, error) {
+	return ports.BackupExecutionResponse{}, nil
+}
+func (f *fakeExecutor) VerifyBackup(context.Context, ports.VerifyBackupRequest) (ports.BackupVerificationResponse, error) {
+	return ports.BackupVerificationResponse{}, nil
+}
+func (f *fakeExecutor) ApplyRetentionPolicy(context.Context, ports.ApplyRetentionPolicyRequest) (ports.ApplyRetentionPolicyResponse, error) {
+	return ports.ApplyRetentionPolicyResponse{}, nil
+}
+func (f *fakeExecutor) GenerateRestorePlan(context.Context, ports.RestorePlanRequest) (ports.RestorePlanResponse, error) {
+	return ports.RestorePlanResponse{}, nil
+}
 
 var _ ports.ExecutorClient = (*fakeExecutor)(nil)
 var _ ports.AuditRepository = (*sqlitestore.Store)(nil)

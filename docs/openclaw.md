@@ -98,7 +98,12 @@ The important MCP server block is:
             "application_version",
             "check_application_update",
             "request_application_update",
-            "request_application_rollback"
+            "request_application_rollback",
+            "list_backups",
+            "backup_status",
+            "backup_history",
+            "request_backup",
+            "request_restore_plan"
           ]
         }
       }
@@ -146,6 +151,11 @@ The expected tool list is:
 - `check_application_update`
 - `request_application_update`
 - `request_application_rollback`
+- `list_backups`
+- `backup_status`
+- `backup_history`
+- `request_backup`
+- `request_restore_plan`
 
 No `exec`, `shell`, `process`, filesystem, SSH, Docker, or direct Podman tool should appear.
 

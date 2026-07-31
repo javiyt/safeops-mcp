@@ -26,6 +26,7 @@ import (
 	"github.com/javiyt/safeops-mcp/internal/bootstrap"
 	"github.com/javiyt/safeops-mcp/internal/config"
 	"github.com/javiyt/safeops-mcp/internal/domain/alert"
+	"github.com/javiyt/safeops-mcp/internal/domain/backup"
 	"github.com/javiyt/safeops-mcp/internal/domain/deployment"
 	"github.com/javiyt/safeops-mcp/internal/ports"
 	"github.com/javiyt/safeops-mcp/internal/redaction"
@@ -47,7 +48,7 @@ func main() {
 
 func run(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: safeopsctl <validate-config|migrate|approvals|audit|alerts|podman|containers|diagnostics|app|groups|logs|cache|records|reset-failed|reboot> [args]")
+		return fmt.Errorf("usage: safeopsctl <validate-config|migrate|approvals|audit|alerts|podman|containers|diagnostics|app|backups|groups|logs|cache|records|reset-failed|reboot> [args]")
 	}
 	switch args[0] {
 	case "validate-config":
@@ -85,10 +86,137 @@ func run(ctx context.Context, args []string) error {
 		return diagnostics(ctx, args[1:])
 	case "app":
 		return appCommand(ctx, args[1:])
+	case "backups":
+		return backupCommand(ctx, args[1:])
 	case "groups", "logs", "cache", "records", "reset-failed", "reboot":
 		return maintenance(ctx, args)
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
+	}
+}
+
+func backupCommand(ctx context.Context, args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: safeopsctl backups <list|status|history|create|restore-plan|verify> [args]")
+	}
+	switch args[0] {
+	case "list":
+		fs := flag.NewFlagSet("backups list", flag.ContinueOnError)
+		cfgPath := fs.String("config", "/etc/safeops/config.yaml", "Path to the SafeOps configuration file.")
+		alias := fs.String("alias", "", "Backup alias.")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		store, err := backupStore(ctx, *cfgPath)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = store.Close() }()
+		items, err := store.ListBackups(ctx, backup.ListFilter{BackupAlias: *alias}, 100)
+		return printJSON(map[string]any{"backups": items, "total": len(items)}, err)
+	case "status":
+		fs := flag.NewFlagSet("backups status", flag.ContinueOnError)
+		cfgPath := fs.String("config", "/etc/safeops/config.yaml", "Path to the SafeOps configuration file.")
+		alias := fs.String("alias", "", "Backup alias.")
+		id := fs.String("id", "", "Backup ID.")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		store, err := backupStore(ctx, *cfgPath)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = store.Close() }()
+		var record backup.Record
+		if *id != "" {
+			record, err = store.GetBackup(ctx, *id)
+		} else {
+			record, err = store.LatestBackup(ctx, *alias)
+		}
+		return printJSON(record, err)
+	case "history":
+		fs := flag.NewFlagSet("backups history", flag.ContinueOnError)
+		cfgPath := fs.String("config", "/etc/safeops/config.yaml", "Path to the SafeOps configuration file.")
+		alias := fs.String("alias", "", "Backup alias.")
+		limit := fs.Int("limit", 10, "Maximum records.")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		store, err := backupStore(ctx, *cfgPath)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = store.Close() }()
+		items, err := store.ListBackups(ctx, backup.ListFilter{BackupAlias: *alias}, *limit)
+		return printJSON(map[string]any{"history": items}, err)
+	case "create":
+		if len(args) < 2 {
+			return fmt.Errorf("usage: safeopsctl backups create <alias> [--reason text] [--dry-run] --config /etc/safeops/config.yaml")
+		}
+		fs := flag.NewFlagSet("backups create", flag.ContinueOnError)
+		cfgPath := fs.String("config", "/etc/safeops/config.yaml", "Path to the SafeOps configuration file.")
+		reason := fs.String("reason", "", "Reason for audit context.")
+		dryRun := fs.Bool("dry-run", false, "Simulate the operation.")
+		if err := fs.Parse(args[2:]); err != nil {
+			return err
+		}
+		cfg, err := config.Load(*cfgPath)
+		if err != nil {
+			return err
+		}
+		_ = reason
+		out, err := executorClient(cfg).CreateBackup(ctx, ports.CreateBackupRequest{BackupAlias: args[1], OperationID: "safeopsctl", TriggeredBy: cfg.Identity.AdministratorID, DryRun: *dryRun})
+		if err == nil && !*dryRun {
+			err = appendCLIBackup(ctx, cfg, out)
+		}
+		return printJSON(out, err)
+	case "restore-plan":
+		if len(args) < 2 {
+			return fmt.Errorf("usage: safeopsctl backups restore-plan <alias> --id backup-001 [--target resource] --config /etc/safeops/config.yaml")
+		}
+		fs := flag.NewFlagSet("backups restore-plan", flag.ContinueOnError)
+		cfgPath := fs.String("config", "/etc/safeops/config.yaml", "Path to the SafeOps configuration file.")
+		id := fs.String("id", "", "Backup ID.")
+		target := fs.String("target", "", "Optional target resource alias.")
+		if err := fs.Parse(args[2:]); err != nil {
+			return err
+		}
+		if *id == "" {
+			return fmt.Errorf("--id is required")
+		}
+		cfg, err := config.Load(*cfgPath)
+		if err != nil {
+			return err
+		}
+		store, err := backupStore(ctx, *cfgPath)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = store.Close() }()
+		record, err := store.GetBackup(ctx, *id)
+		if err != nil {
+			return err
+		}
+		out, err := executorClient(cfg).GenerateRestorePlan(ctx, ports.RestorePlanRequest{BackupAlias: args[1], BackupID: *id, SnapshotID: record.SnapshotID, Target: *target})
+		return printJSON(out, err)
+	case "verify":
+		if len(args) < 2 {
+			return fmt.Errorf("usage: safeopsctl backups verify <alias> --id backup-001 --config /etc/safeops/config.yaml")
+		}
+		fs := flag.NewFlagSet("backups verify", flag.ContinueOnError)
+		cfgPath := fs.String("config", "/etc/safeops/config.yaml", "Path to the SafeOps configuration file.")
+		id := fs.String("id", "", "Backup ID.")
+		if err := fs.Parse(args[2:]); err != nil {
+			return err
+		}
+		cfg, err := config.Load(*cfgPath)
+		if err != nil {
+			return err
+		}
+		out, err := executorClient(cfg).VerifyBackup(ctx, ports.VerifyBackupRequest{BackupAlias: args[1], BackupID: *id})
+		return printJSON(out, err)
+	default:
+		return fmt.Errorf("unknown backups command %q", args[0])
 	}
 }
 
@@ -187,6 +315,77 @@ func appendCLIHistory(ctx context.Context, cfg config.Config, alias, deploymentT
 		return store.PruneDeployments(ctx, alias, app.Rollback.VersionsToKeep)
 	}
 	return nil
+}
+
+func backupStore(ctx context.Context, cfgPath string) (*sqlitestore.Store, error) {
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		return nil, err
+	}
+	store, err := sqlitestore.Open(cfg.Database.Path)
+	if err != nil {
+		return nil, err
+	}
+	if err := store.Migrate(ctx); err != nil {
+		_ = store.Close()
+		return nil, err
+	}
+	return store, nil
+}
+
+func appendCLIBackup(ctx context.Context, cfg config.Config, out ports.BackupExecutionResponse) error {
+	store, err := sqlitestore.Open(cfg.Database.Path)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = store.Close() }()
+	if err := store.Migrate(ctx); err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	startTime, err := time.Parse(time.RFC3339, out.StartTime)
+	if err != nil {
+		startTime = now
+	}
+	var endTime *time.Time
+	if out.EndTime != "" {
+		parsed, err := time.Parse(time.RFC3339, out.EndTime)
+		if err == nil {
+			endTime = &parsed
+		}
+	}
+	var checkedAt *time.Time
+	if out.IntegrityCheckedAt != "" {
+		parsed, err := time.Parse(time.RFC3339, out.IntegrityCheckedAt)
+		if err == nil {
+			checkedAt = &parsed
+		}
+	}
+	status := backup.StatusCompleted
+	if out.Status == "failed" {
+		status = backup.StatusFailed
+	}
+	if out.IntegrityVerified {
+		status = backup.StatusVerified
+	}
+	metadata, _ := json.Marshal(out.Metadata)
+	return store.AppendBackup(ctx, backup.Record{
+		ID:                 fmt.Sprintf("backup_safeopsctl_%d", now.UnixNano()),
+		BackupAlias:        out.BackupAlias,
+		SourceAlias:        out.SourceAlias,
+		Backend:            out.Backend,
+		SnapshotID:         out.SnapshotID,
+		Status:             status,
+		StartTime:          startTime,
+		EndTime:            endTime,
+		DurationSeconds:    out.DurationSeconds,
+		SizeBytes:          out.SizeBytes,
+		IntegrityVerified:  out.IntegrityVerified,
+		IntegrityCheckedAt: checkedAt,
+		ErrorMessage:       redaction.Redact(out.ErrorMessage),
+		Metadata:           redaction.Redact(string(metadata)),
+		CreatedAt:          now,
+	})
 }
 
 func firstNonEmptyCLI(values ...string) string {

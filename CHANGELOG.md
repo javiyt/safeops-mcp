@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.9.0
+
+- Added configured `backups` resources with Restic and predefined command backends.
+- Added MCP tools: `list_backups`, `backup_status`, `backup_history`, `request_backup`, and `request_restore_plan`.
+- Added SQLite backup metadata persistence with snapshot IDs, timestamps, durations, size, status, integrity state, redacted errors, and metadata.
+- Added confirmed backup execution through the existing approval and audit flow, with resource locks for backup aliases.
+- Added Restic integrity checks, retention hooks, and password-file validation requiring absolute paths outside the repository with `0600` permissions.
+- Added restore-plan generation without restore execution.
+- Added `safeopsctl backups list|status|history|create|restore-plan|verify`.
+- Updated README, architecture, security model, operations, OpenClaw, and example configuration documentation for backups and recovery planning.
+
 ## 0.8.0
 
 - Added deployable `applications` configuration for controlled service and container updates while preserving existing cache cleanup configuration.

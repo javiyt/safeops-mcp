@@ -414,3 +414,65 @@ Telegram and OpenClaw should use the MCP tools instead of direct CLI execution: 
 History rows use status `success`, `failed`, or the executor result status. `previous_version` and `next_version` describe the transition, while `image_digest` or `commit_hash` identify the deployed artifact. SafeOps prunes history per application according to `rollback.versions_to_keep`.
 
 Install `git` for service applications. Container applications use the configured Podman binary; `skopeo` is not required by this implementation.
+
+## Backups And Recovery Planning
+
+Run migrations before using backups:
+
+```sh
+safeopsctl migrate --config /etc/safeops/config.yaml
+```
+
+Configure each backup under `backups`. The alias is the only value accepted by Telegram, OpenClaw, or CLI requests:
+
+```yaml
+backups:
+  service-data-backup:
+    source_alias: service-alpha
+    description: Configured service data backup
+    backend: restic
+    repository: /mnt/backups/service-data
+    password_file: /etc/safeops/restic-password
+    source_path: /var/lib/service-alpha
+    retention:
+      keep_last: 7
+      keep_daily: 30
+      keep_weekly: 12
+    limits:
+      max_size_gb: 50
+      timeout: 30m
+    integrity_check: true
+    pre_commands:
+      - /usr/bin/systemctl stop app-alpha.service
+    post_commands:
+      - /usr/bin/systemctl start app-alpha.service
+  app-config-backup:
+    source_alias: service-alpha
+    description: Configured application file backup
+    backend: command
+    operation: /usr/bin/tar -czf /tmp/app-config-backup.tar.gz /etc/app-service
+    destination: /mnt/backups/app-config
+    retention: 30
+    limits:
+      timeout: 5m
+```
+
+For Restic, create the password file outside the repository and restrict permissions:
+
+```sh
+install -d -m 0750 /etc/safeops
+install -m 0600 /dev/null /etc/safeops/restic-password
+```
+
+Operate from the CLI:
+
+```sh
+safeopsctl backups list --alias service-data-backup --config /etc/safeops/config.yaml
+safeopsctl backups status --alias service-data-backup --config /etc/safeops/config.yaml
+safeopsctl backups history --alias service-data-backup --limit 10 --config /etc/safeops/config.yaml
+safeopsctl backups create service-data-backup --dry-run --config /etc/safeops/config.yaml
+safeopsctl backups verify service-data-backup --id backup_001 --config /etc/safeops/config.yaml
+safeopsctl backups restore-plan service-data-backup --id backup_001 --config /etc/safeops/config.yaml
+```
+
+Telegram and OpenClaw should use `list_backups`, `backup_status`, `backup_history`, `request_backup`, `confirm_action`, and `request_restore_plan`. Restore plans are intentionally read-only. They describe affected resources, expected steps, downtime risk, and approval requirements, but they do not execute restoration.

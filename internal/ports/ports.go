@@ -7,6 +7,7 @@ import (
 	"github.com/javiyt/safeops-mcp/internal/domain/alert"
 	"github.com/javiyt/safeops-mcp/internal/domain/approval"
 	"github.com/javiyt/safeops-mcp/internal/domain/audit"
+	"github.com/javiyt/safeops-mcp/internal/domain/backup"
 	"github.com/javiyt/safeops-mcp/internal/domain/deployment"
 	"github.com/javiyt/safeops-mcp/internal/domain/service"
 )
@@ -61,6 +62,14 @@ type DeploymentRepository interface {
 	PruneDeployments(ctx context.Context, applicationAlias string, keep int) error
 }
 
+type BackupRepository interface {
+	AppendBackup(ctx context.Context, record backup.Record) error
+	ListBackups(ctx context.Context, filter backup.ListFilter, limit int) ([]backup.Record, error)
+	LatestBackup(ctx context.Context, backupAlias string) (backup.Record, error)
+	GetBackup(ctx context.Context, id string) (backup.Record, error)
+	BackupInProgress(ctx context.Context, backupAlias string) (bool, error)
+}
+
 type ExecutorClient interface {
 	SystemStatus(ctx context.Context) (SystemStatus, error)
 	DiskStatus(ctx context.Context, alias string) (DiskStatus, error)
@@ -89,6 +98,10 @@ type ExecutorClient interface {
 	CheckApplicationUpdate(ctx context.Context, req ApplicationVersionRequest) (ApplicationUpdateCheckResponse, error)
 	UpdateApplication(ctx context.Context, req UpdateApplicationRequest) (ApplicationDeploymentResponse, error)
 	RollbackApplication(ctx context.Context, req RollbackApplicationRequest) (ApplicationDeploymentResponse, error)
+	CreateBackup(ctx context.Context, req CreateBackupRequest) (BackupExecutionResponse, error)
+	VerifyBackup(ctx context.Context, req VerifyBackupRequest) (BackupVerificationResponse, error)
+	ApplyRetentionPolicy(ctx context.Context, req ApplyRetentionPolicyRequest) (ApplyRetentionPolicyResponse, error)
+	GenerateRestorePlan(ctx context.Context, req RestorePlanRequest) (RestorePlanResponse, error)
 }
 
 type ExecutorServer interface {
@@ -119,6 +132,10 @@ type ExecutorServer interface {
 	CheckApplicationUpdate(ctx context.Context, req ApplicationVersionRequest) (ApplicationUpdateCheckResponse, error)
 	UpdateApplication(ctx context.Context, req UpdateApplicationRequest) (ApplicationDeploymentResponse, error)
 	RollbackApplication(ctx context.Context, req RollbackApplicationRequest) (ApplicationDeploymentResponse, error)
+	CreateBackup(ctx context.Context, req CreateBackupRequest) (BackupExecutionResponse, error)
+	VerifyBackup(ctx context.Context, req VerifyBackupRequest) (BackupVerificationResponse, error)
+	ApplyRetentionPolicy(ctx context.Context, req ApplyRetentionPolicyRequest) (ApplyRetentionPolicyResponse, error)
+	GenerateRestorePlan(ctx context.Context, req RestorePlanRequest) (RestorePlanResponse, error)
 }
 
 type SystemStatus struct {
@@ -544,4 +561,89 @@ type ApplicationDeploymentResponse struct {
 	RollbackAttempted bool                   `json:"rollback_attempted"`
 	RollbackStatus    string                 `json:"rollback_status,omitempty"`
 	WouldRun          []string               `json:"would_run,omitempty"`
+}
+
+type CreateBackupRequest struct {
+	BackupAlias string `json:"backup_alias"`
+	OperationID string `json:"operation_id"`
+	TriggeredBy string `json:"triggered_by"`
+	DryRun      bool   `json:"dry_run"`
+}
+
+type BackupExecutionResponse struct {
+	Status             string         `json:"status"`
+	Action             string         `json:"action"`
+	BackupAlias        string         `json:"backup_alias"`
+	SourceAlias        string         `json:"source_alias,omitempty"`
+	Backend            string         `json:"backend"`
+	SnapshotID         string         `json:"snapshot_id"`
+	StartTime          string         `json:"start_time"`
+	EndTime            string         `json:"end_time,omitempty"`
+	DurationSeconds    int64          `json:"duration_seconds"`
+	SizeBytes          int64          `json:"size_bytes"`
+	IntegrityVerified  bool           `json:"integrity_verified"`
+	IntegrityCheckedAt string         `json:"integrity_checked_at,omitempty"`
+	RetentionApplied   bool           `json:"retention_applied"`
+	RetentionDeleted   int            `json:"retention_deleted"`
+	ErrorMessage       string         `json:"error_message,omitempty"`
+	Metadata           map[string]any `json:"metadata,omitempty"`
+	WouldRun           []string       `json:"would_run,omitempty"`
+}
+
+type VerifyBackupRequest struct {
+	BackupAlias string `json:"backup_alias"`
+	BackupID    string `json:"backup_id"`
+	SnapshotID  string `json:"snapshot_id"`
+	DryRun      bool   `json:"dry_run"`
+}
+
+type BackupVerificationResponse struct {
+	Status             string `json:"status"`
+	BackupAlias        string `json:"backup_alias"`
+	BackupID           string `json:"backup_id,omitempty"`
+	SnapshotID         string `json:"snapshot_id,omitempty"`
+	IntegrityVerified  bool   `json:"integrity_verified"`
+	IntegrityCheckedAt string `json:"integrity_checked_at,omitempty"`
+	WouldRun           string `json:"would_run,omitempty"`
+}
+
+type ApplyRetentionPolicyRequest struct {
+	BackupAlias string `json:"backup_alias"`
+	DryRun      bool   `json:"dry_run"`
+}
+
+type ApplyRetentionPolicyResponse struct {
+	Status       string   `json:"status"`
+	BackupAlias  string   `json:"backup_alias"`
+	Deleted      int      `json:"deleted"`
+	Retained     int      `json:"retained"`
+	WouldRun     []string `json:"would_run,omitempty"`
+	RetentionSet bool     `json:"retention_set"`
+}
+
+type RestorePlanRequest struct {
+	BackupAlias string `json:"backup_alias"`
+	BackupID    string `json:"backup_id"`
+	SnapshotID  string `json:"snapshot_id"`
+	Target      string `json:"target,omitempty"`
+}
+
+type RestorePlanResponse struct {
+	PlanID            string            `json:"plan_id"`
+	Backup            RestorePlanBackup `json:"backup"`
+	AffectedResources []string          `json:"affected_resources"`
+	Steps             []string          `json:"steps"`
+	EstimatedDuration string            `json:"estimated_duration"`
+	Risks             []string          `json:"risks"`
+	RequiresApproval  bool              `json:"requires_approval"`
+	Mutable           bool              `json:"mutable"`
+}
+
+type RestorePlanBackup struct {
+	ID        string  `json:"id"`
+	Alias     string  `json:"alias"`
+	Snapshot  string  `json:"snapshot_id"`
+	CreatedAt string  `json:"created_at"`
+	SizeGB    float64 `json:"size_gb"`
+	Integrity bool    `json:"integrity"`
 }

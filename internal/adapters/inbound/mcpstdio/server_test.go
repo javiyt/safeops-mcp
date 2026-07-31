@@ -414,6 +414,18 @@ func (fakeExecutor) UpdateApplication(context.Context, ports.UpdateApplicationRe
 func (fakeExecutor) RollbackApplication(context.Context, ports.RollbackApplicationRequest) (ports.ApplicationDeploymentResponse, error) {
 	return ports.ApplicationDeploymentResponse{Status: "success", Action: "rollback_application", Application: "app-service"}, nil
 }
+func (fakeExecutor) CreateBackup(context.Context, ports.CreateBackupRequest) (ports.BackupExecutionResponse, error) {
+	return ports.BackupExecutionResponse{Status: "completed", Action: "create_backup", BackupAlias: "backup-alpha", Backend: "command"}, nil
+}
+func (fakeExecutor) VerifyBackup(context.Context, ports.VerifyBackupRequest) (ports.BackupVerificationResponse, error) {
+	return ports.BackupVerificationResponse{Status: "verified", BackupAlias: "backup-alpha", IntegrityVerified: true}, nil
+}
+func (fakeExecutor) ApplyRetentionPolicy(context.Context, ports.ApplyRetentionPolicyRequest) (ports.ApplyRetentionPolicyResponse, error) {
+	return ports.ApplyRetentionPolicyResponse{Status: "completed", BackupAlias: "backup-alpha"}, nil
+}
+func (fakeExecutor) GenerateRestorePlan(context.Context, ports.RestorePlanRequest) (ports.RestorePlanResponse, error) {
+	return ports.RestorePlanResponse{PlanID: "plan_1", RequiresApproval: true}, nil
+}
 
 type fakeClock struct {
 	now time.Time

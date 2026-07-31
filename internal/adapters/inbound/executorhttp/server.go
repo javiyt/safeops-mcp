@@ -73,6 +73,10 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	mux.HandleFunc("GET /v1/applications/{alias}/check-update", s.handleCheckApplicationUpdate)
 	mux.HandleFunc("POST /v1/applications/update", s.handleUpdateApplication)
 	mux.HandleFunc("POST /v1/applications/rollback", s.handleRollbackApplication)
+	mux.HandleFunc("POST /v1/backups/create", s.handleCreateBackup)
+	mux.HandleFunc("POST /v1/backups/verify", s.handleVerifyBackup)
+	mux.HandleFunc("POST /v1/backups/retention", s.handleApplyRetentionPolicy)
+	mux.HandleFunc("POST /v1/backups/restore-plan", s.handleGenerateRestorePlan)
 	s.server = &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	go func() {
 		<-ctx.Done()
@@ -279,6 +283,46 @@ func (s *Server) handleRollbackApplication(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	out, err := s.Backend.RollbackApplication(r.Context(), req)
+	writeJSON(w, out, err)
+}
+
+func (s *Server) handleCreateBackup(w http.ResponseWriter, r *http.Request) {
+	var req ports.CreateBackupRequest
+	if err := decodeStrict(w, r, &req); err != nil {
+		writeJSON(w, nil, err)
+		return
+	}
+	out, err := s.Backend.CreateBackup(r.Context(), req)
+	writeJSON(w, out, err)
+}
+
+func (s *Server) handleVerifyBackup(w http.ResponseWriter, r *http.Request) {
+	var req ports.VerifyBackupRequest
+	if err := decodeStrict(w, r, &req); err != nil {
+		writeJSON(w, nil, err)
+		return
+	}
+	out, err := s.Backend.VerifyBackup(r.Context(), req)
+	writeJSON(w, out, err)
+}
+
+func (s *Server) handleApplyRetentionPolicy(w http.ResponseWriter, r *http.Request) {
+	var req ports.ApplyRetentionPolicyRequest
+	if err := decodeStrict(w, r, &req); err != nil {
+		writeJSON(w, nil, err)
+		return
+	}
+	out, err := s.Backend.ApplyRetentionPolicy(r.Context(), req)
+	writeJSON(w, out, err)
+}
+
+func (s *Server) handleGenerateRestorePlan(w http.ResponseWriter, r *http.Request) {
+	var req ports.RestorePlanRequest
+	if err := decodeStrict(w, r, &req); err != nil {
+		writeJSON(w, nil, err)
+		return
+	}
+	out, err := s.Backend.GenerateRestorePlan(r.Context(), req)
 	writeJSON(w, out, err)
 }
 

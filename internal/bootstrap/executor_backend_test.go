@@ -313,6 +313,33 @@ func TestExecutorBackendContainerUpdateRollsBackOnHealthFailure(t *testing.T) {
 	}
 }
 
+func TestExecutorBackendBackupDryRunAndRestorePlan(t *testing.T) {
+	b := testBackend()
+	b.Config.Backups = map[string]config.BackupConfig{
+		"backup-alpha": {
+			SourceAlias: "service-alpha",
+			Backend:     "command",
+			Operation:   "/usr/bin/tar -czf /tmp/app-config.tar.gz /etc/app-service",
+			Destination: "/mnt/backups/app-service",
+			Retention:   config.BackupRetention{KeepLast: 7},
+		},
+	}
+	out, err := b.CreateBackup(context.Background(), ports.CreateBackupRequest{BackupAlias: "backup-alpha", OperationID: "op_1", DryRun: true})
+	if err != nil {
+		t.Fatalf("CreateBackup() error = %v", err)
+	}
+	if out.Status != "simulated" || len(out.WouldRun) != 1 {
+		t.Fatalf("CreateBackup() = %+v", out)
+	}
+	plan, err := b.GenerateRestorePlan(context.Background(), ports.RestorePlanRequest{BackupAlias: "backup-alpha", BackupID: "backup_1", SnapshotID: "snapshot-alpha"})
+	if err != nil {
+		t.Fatalf("GenerateRestorePlan() error = %v", err)
+	}
+	if plan.Mutable || !plan.RequiresApproval || len(plan.Steps) == 0 {
+		t.Fatalf("plan = %+v", plan)
+	}
+}
+
 func testBackend() ExecutorBackend {
 	cfg := config.Config{
 		Filesystem: config.FilesystemConfig{DiskPaths: map[string]config.DiskPathConfig{"root": {Path: "/"}}},

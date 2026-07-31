@@ -229,3 +229,15 @@ func (b fakeBackend) UpdateApplication(context.Context, ports.UpdateApplicationR
 func (b fakeBackend) RollbackApplication(context.Context, ports.RollbackApplicationRequest) (ports.ApplicationDeploymentResponse, error) {
 	return ports.ApplicationDeploymentResponse{Status: "success", Action: "rollback_application", Application: "app-service"}, b.err
 }
+func (b fakeBackend) CreateBackup(context.Context, ports.CreateBackupRequest) (ports.BackupExecutionResponse, error) {
+	return ports.BackupExecutionResponse{Status: "completed", Action: "create_backup", BackupAlias: "backup-alpha", Backend: "command"}, b.err
+}
+func (b fakeBackend) VerifyBackup(context.Context, ports.VerifyBackupRequest) (ports.BackupVerificationResponse, error) {
+	return ports.BackupVerificationResponse{Status: "verified", BackupAlias: "backup-alpha", IntegrityVerified: true}, b.err
+}
+func (b fakeBackend) ApplyRetentionPolicy(context.Context, ports.ApplyRetentionPolicyRequest) (ports.ApplyRetentionPolicyResponse, error) {
+	return ports.ApplyRetentionPolicyResponse{Status: "completed", BackupAlias: "backup-alpha"}, b.err
+}
+func (b fakeBackend) GenerateRestorePlan(context.Context, ports.RestorePlanRequest) (ports.RestorePlanResponse, error) {
+	return ports.RestorePlanResponse{PlanID: "plan_1", RequiresApproval: true}, b.err
+}

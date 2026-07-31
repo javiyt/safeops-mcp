@@ -153,3 +153,17 @@ Application deployment flow:
 8. Successful updates and rollbacks are persisted in `deployment_history` with version, digest or commit, previous/next version, user, operation status, and metadata. History is pruned per application using `rollback.versions_to_keep`.
 
 SafeOps still does not build images, deploy new unconfigured applications, run repository scripts automatically, switch arbitrary branches, or accept image tags from the user. Those remain future extensions.
+
+Backup flow:
+
+1. Backup resources are declared under `backups` with a configured alias, backend, source metadata, timeout, retention, optional integrity check, and optional pre/post commands.
+2. Read tools `list_backups`, `backup_status`, and `backup_history` read persisted SQLite metadata only. They do not inspect backup contents or run backend commands.
+3. `request_backup` creates a generic approval with action type `create_backup` and resource kind `backup`.
+4. Confirmation revalidates the configured backup alias, owner, code, policy, arguments hash, and persistent operation lock before calling the executor.
+5. The executor resolves the backup alias from its own configuration, runs configured pre commands, runs either Restic or the configured command backend with separated arguments and no shell, optionally verifies integrity, applies backend retention, and runs configured post commands.
+6. `safeops-mcp` persists the final backup metadata in SQLite, including snapshot ID, timestamps, size, status, integrity result, and redacted metadata.
+7. `request_restore_plan` validates an existing backup ID and asks the executor to generate a structured plan. It does not stop services, restore files, or execute mutable commands.
+
+Restic backups use `/usr/bin/restic` with closed argument lists such as `restic -r <configured-repository> --password-file <configured-password-file> backup <configured-source-path> --json`, `restic check`, and `restic forget --prune`. Command backups run only the literal configured command split into executable and arguments; shell metacharacters are rejected during configuration validation.
+
+Backup operation locks use the existing persistent lock table with resource key `backup/<backup_alias>`. This prevents concurrent confirmed backups for the same backup alias and releases the lock after success, failure, cancellation, or context completion.

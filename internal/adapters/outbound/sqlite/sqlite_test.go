@@ -10,6 +10,7 @@ import (
 	"github.com/javiyt/safeops-mcp/internal/domain/alert"
 	"github.com/javiyt/safeops-mcp/internal/domain/approval"
 	"github.com/javiyt/safeops-mcp/internal/domain/audit"
+	"github.com/javiyt/safeops-mcp/internal/domain/backup"
 	"github.com/javiyt/safeops-mcp/internal/domain/deployment"
 )
 
@@ -80,6 +81,61 @@ func TestApprovalRepositoryLifecycle(t *testing.T) {
 	}
 	if len(items) != 1 {
 		t.Fatalf("List() length = %d", len(items))
+	}
+}
+
+func TestBackupRepositoryLifecycle(t *testing.T) {
+	store := migratedStore(t)
+	ctx := context.Background()
+	now := time.Date(2026, 7, 24, 10, 0, 0, 0, time.UTC)
+	end := now.Add(time.Minute)
+	checked := end.Add(10 * time.Second)
+	record := backup.Record{
+		ID:                 "backup_1",
+		BackupAlias:        "backup-alpha",
+		SourceAlias:        "service-alpha",
+		Backend:            "command",
+		SnapshotID:         "snapshot-alpha",
+		Status:             backup.StatusVerified,
+		StartTime:          now,
+		EndTime:            &end,
+		DurationSeconds:    60,
+		SizeBytes:          1024,
+		IntegrityVerified:  true,
+		IntegrityCheckedAt: &checked,
+		Metadata:           `{"backend":"command"}`,
+		CreatedAt:          now,
+	}
+	if err := store.AppendBackup(ctx, record); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.GetBackup(ctx, "backup_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.BackupAlias != "backup-alpha" || !got.IntegrityVerified || got.EndTime == nil {
+		t.Fatalf("GetBackup() = %+v", got)
+	}
+	latest, err := store.LatestBackup(ctx, "backup-alpha")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if latest.ID != "backup_1" {
+		t.Fatalf("LatestBackup() = %+v", latest)
+	}
+	items, err := store.ListBackups(ctx, backup.ListFilter{BackupAlias: "backup-alpha"}, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("ListBackups() length = %d", len(items))
+	}
+	running, err := store.BackupInProgress(ctx, "backup-alpha")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if running {
+		t.Fatal("BackupInProgress() = true, want false")
 	}
 }
 

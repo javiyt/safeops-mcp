@@ -115,7 +115,12 @@
             "application_version",
             "check_application_update",
             "request_application_update",
-            "request_application_rollback"
+            "request_application_rollback",
+            "list_backups",
+            "backup_status",
+            "backup_history",
+            "request_backup",
+            "request_restore_plan"
           ],
           "exclude": [
             "resources_*",

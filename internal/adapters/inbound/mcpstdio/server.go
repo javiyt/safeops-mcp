@@ -273,6 +273,36 @@ func (s Server) callTool(ctx context.Context, name string, args json.RawMessage)
 			return nil, err
 		}
 		return s.Tools.RequestApplicationRollback(ctx, s.UserID, in)
+	case "list_backups":
+		var in tools.BackupAliasInput
+		if err := json.Unmarshal(args, &in); err != nil {
+			return nil, err
+		}
+		return s.Tools.ListBackups(ctx, s.UserID, in)
+	case "backup_status":
+		var in tools.BackupStatusInput
+		if err := json.Unmarshal(args, &in); err != nil {
+			return nil, err
+		}
+		return s.Tools.BackupStatus(ctx, s.UserID, in)
+	case "backup_history":
+		var in tools.BackupHistoryInput
+		if err := json.Unmarshal(args, &in); err != nil {
+			return nil, err
+		}
+		return s.Tools.BackupHistory(ctx, s.UserID, in)
+	case "request_backup":
+		var in tools.RequestBackupInput
+		if err := json.Unmarshal(args, &in); err != nil {
+			return nil, err
+		}
+		return s.Tools.RequestBackup(ctx, s.UserID, in)
+	case "request_restore_plan":
+		var in tools.RequestRestorePlanInput
+		if err := json.Unmarshal(args, &in); err != nil {
+			return nil, err
+		}
+		return s.Tools.RequestRestorePlan(ctx, s.UserID, in)
 	default:
 		return nil, fmt.Errorf("tool %q is not supported", name)
 	}
@@ -318,6 +348,11 @@ func toolDefinitions(podmanEnabled bool) []map[string]any {
 		tool("check_application_update", "Read-only SafeOps deployment tool. Checks whether a configured application has an available update using only configured Git branches or image channels.", map[string]any{"type": "object", "required": []string{"application"}, "additionalProperties": false, "properties": map[string]any{"application": map[string]string{"type": "string"}}}),
 		tool("request_application_update", "Mutable SafeOps deployment tool. Creates a pending approval to update a configured application. It never accepts user-supplied image references, tags, branches, repositories, paths, or commands; execution occurs only after confirm_action succeeds.", map[string]any{"type": "object", "required": []string{"application", "reason"}, "additionalProperties": false, "properties": map[string]any{"application": map[string]string{"type": "string"}, "reason": map[string]string{"type": "string"}, "version": map[string]string{"type": "string"}}}),
 		tool("request_application_rollback", "Mutable SafeOps deployment tool. Creates a pending approval to roll back a configured application to a version already present in SafeOps deployment history; execution occurs only after confirm_action succeeds.", map[string]any{"type": "object", "required": []string{"application", "reason"}, "additionalProperties": false, "properties": map[string]any{"application": map[string]string{"type": "string"}, "reason": map[string]string{"type": "string"}, "version": map[string]string{"type": "string"}}}),
+		tool("list_backups", "Read-only SafeOps backup tool. Lists persisted backup metadata for a configured backup alias or all configured aliases; it never reads backup contents or secrets.", map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"backup_alias": map[string]string{"type": "string"}}}),
+		tool("backup_status", "Read-only SafeOps backup tool. Returns persisted metadata for a specific backup ID or the latest backup for a configured alias.", map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"backup_alias": map[string]string{"type": "string"}, "backup_id": map[string]string{"type": "string"}}}),
+		tool("backup_history", "Read-only SafeOps backup tool. Returns bounded persisted backup history with timestamps, sizes, durations, status, and integrity metadata.", map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"backup_alias": map[string]string{"type": "string"}, "limit": map[string]string{"type": "integer"}}}),
+		tool("request_backup", "Mutable SafeOps backup tool. Creates a pending approval to run a configured full backup. It never accepts paths, commands, repositories, passwords, or backend arguments from the user.", map[string]any{"type": "object", "required": []string{"backup_alias", "reason"}, "additionalProperties": false, "properties": map[string]any{"backup_alias": map[string]string{"type": "string"}, "reason": map[string]string{"type": "string"}}}),
+		tool("request_restore_plan", "Read-only SafeOps backup tool. Generates a structured restoration plan for an existing backup without executing restore commands or changing resources.", map[string]any{"type": "object", "required": []string{"backup_alias", "backup_id"}, "additionalProperties": false, "properties": map[string]any{"backup_alias": map[string]string{"type": "string"}, "backup_id": map[string]string{"type": "string"}, "target": map[string]string{"type": "string"}}}),
 	}
 	if podmanEnabled {
 		defs = append(defs,
