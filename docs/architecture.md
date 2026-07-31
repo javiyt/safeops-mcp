@@ -140,3 +140,16 @@ Maintenance flow:
 6. Log rotation and cache cleanup operate only on configured paths. The executor uses filesystem APIs with controlled paths and does not invoke a shell.
 7. SafeOps record cleanup deletes only old audit and approval rows while preserving the configured minimum record count.
 8. Host reboot is disabled by default. When enabled, it uses a longer confirmation code, checks for active mutable locks, and schedules reboot through the configured restricted command. `cancel_action` can cancel a reboot approval before confirmation or call the executor cancellation operation for a reboot that has already been scheduled.
+
+Application deployment flow:
+
+1. Deployable applications are declared under `applications` and must point at an existing configured service or container alias.
+2. Read tools `application_version` and `check_application_update` call the executor to compare the current deployed version with the configured source. Service applications use a configured version file and/or a fixed Git branch. Container applications use the configured registry, repository, and channel.
+3. `request_application_update` and `request_application_rollback` create generic approvals with action types `update_application` and `rollback_application`, resource kind `application`, the configured alias, and normalized target metadata.
+4. Confirmation revalidates user, code, policy, application permissions, configuration, arguments hash, and the persistent operation lock before calling the executor.
+5. For Git-backed services, the executor uses `git ls-remote`, `git fetch`, and `git checkout --detach <commit>` with separated arguments and only the configured repository, path, and branch. Optional post-update commands are fixed in configuration.
+6. For container applications, the executor builds the image reference only from configuration, uses `podman pull`, verifies the expected digest when required, and restarts the configured Podman or Quadlet workload.
+7. The executor waits for the configured service or container health policy after the restart. If an update health check fails, it attempts rollback to the previously observed version and returns rollback status.
+8. Successful updates and rollbacks are persisted in `deployment_history` with version, digest or commit, previous/next version, user, operation status, and metadata. History is pruned per application using `rollback.versions_to_keep`.
+
+SafeOps still does not build images, deploy new unconfigured applications, run repository scripts automatically, switch arbitrary branches, or accept image tags from the user. Those remain future extensions.

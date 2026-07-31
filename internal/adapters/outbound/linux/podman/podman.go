@@ -97,6 +97,22 @@ func (c Client) Restart(ctx context.Context, name string) error {
 	return nil
 }
 
+func (c Client) RemoteImageDigest(ctx context.Context, image string) (string, error) {
+	res, err := c.Runner.Run(ctx, c.Binary, "image", "inspect", "--format", "{{.Digest}}", image)
+	if err != nil {
+		return "", errors.New(redaction.Redact(err.Error()))
+	}
+	return strings.TrimSpace(res.Stdout), nil
+}
+
+func (c Client) PullImage(ctx context.Context, image string) (string, error) {
+	_, err := c.Runner.Run(ctx, c.Binary, "pull", image)
+	if err != nil {
+		return "", errors.New(redaction.Redact(err.Error()))
+	}
+	return c.RemoteImageDigest(ctx, image)
+}
+
 func (c Client) Start(ctx context.Context, name string) error {
 	_, err := c.Runner.Run(ctx, c.Binary, "start", name)
 	if err != nil {

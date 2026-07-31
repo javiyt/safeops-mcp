@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/javiyt/safeops-mcp/internal/adapters/outbound/linux/process"
 	"github.com/javiyt/safeops-mcp/internal/config"
 	"github.com/javiyt/safeops-mcp/internal/domain/service"
 	"github.com/javiyt/safeops-mcp/internal/ports"
@@ -31,6 +32,8 @@ type ExecutorBackend struct {
 	Journal     JournalReader
 	Healthcheck HealthcheckClient
 	Podman      PodmanClient
+	Git         GitClient
+	Runner      process.Runner
 	Rebooter    HostRebooter
 }
 
@@ -94,6 +97,15 @@ type PodmanClient interface {
 	Stop(ctx context.Context, name string) error
 	WaitForRunning(ctx context.Context, alias, name, management string, attempts int, interval time.Duration) (ports.ContainerStatus, int, error)
 	WaitForHealth(ctx context.Context, alias, name, management string, attempts int, interval time.Duration) (string, int, error)
+	RemoteImageDigest(ctx context.Context, image string) (string, error)
+	PullImage(ctx context.Context, image string) (string, error)
+}
+
+type GitClient interface {
+	RemoteCommit(ctx context.Context, repositoryURL, branch string) (string, error)
+	CurrentCommit(ctx context.Context, repositoryPath string) (string, error)
+	Fetch(ctx context.Context, repositoryPath, branch string) error
+	CheckoutCommit(ctx context.Context, repositoryPath, commit string) error
 }
 
 type HostRebooter interface {

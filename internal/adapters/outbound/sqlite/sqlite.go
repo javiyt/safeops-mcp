@@ -10,6 +10,7 @@ import (
 	"github.com/javiyt/safeops-mcp/internal/domain/alert"
 	"github.com/javiyt/safeops-mcp/internal/domain/approval"
 	"github.com/javiyt/safeops-mcp/internal/domain/audit"
+	"github.com/javiyt/safeops-mcp/internal/domain/deployment"
 	"github.com/javiyt/safeops-mcp/internal/ports"
 	"github.com/javiyt/safeops-mcp/migrations"
 	_ "modernc.org/sqlite"
@@ -284,6 +285,92 @@ func (s *Store) PruneRecords(ctx context.Context, before time.Time, minRecords i
 	out.Status = "executed"
 	out.RecordsDeleted = toDelete
 	return out, nil
+}
+
+func (s *Store) AppendDeployment(ctx context.Context, record deployment.HistoryRecord) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO deployment_history
+(id, application_alias, version, deployed_at, deployment_type, triggered_by, image_digest, commit_hash, status, previous_version, next_version, metadata, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		record.ID,
+		record.ApplicationAlias,
+		record.Version,
+		formatTime(record.DeployedAt),
+		record.DeploymentType,
+		record.TriggeredBy,
+		record.ImageDigest,
+		record.CommitHash,
+		record.Status,
+		record.PreviousVersion,
+		record.NextVersion,
+		record.Metadata,
+		formatTime(record.CreatedAt),
+	)
+	return err
+}
+
+func (s *Store) ListDeployments(ctx context.Context, applicationAlias string, limit int) ([]deployment.HistoryRecord, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT id, application_alias, version, deployed_at, deployment_type, triggered_by, image_digest, commit_hash, status, previous_version, next_version, metadata, created_at
+FROM deployment_history WHERE application_alias = ? ORDER BY deployed_at DESC LIMIT ?`, applicationAlias, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []deployment.HistoryRecord
+	for rows.Next() {
+		record, err := scanDeployment(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, record)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) LatestSuccessfulDeployment(ctx context.Context, applicationAlias string) (deployment.HistoryRecord, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT id, application_alias, version, deployed_at, deployment_type, triggered_by, image_digest, commit_hash, status, previous_version, next_version, metadata, created_at
+FROM deployment_history WHERE application_alias = ? AND status = 'success' ORDER BY deployed_at DESC LIMIT 1`, applicationAlias)
+	return scanDeployment(row)
+}
+
+func (s *Store) PruneDeployments(ctx context.Context, applicationAlias string, keep int) error {
+	if keep <= 0 {
+		return nil
+	}
+	_, err := s.db.ExecContext(ctx, `DELETE FROM deployment_history
+WHERE application_alias = ? AND id NOT IN (
+  SELECT id FROM deployment_history WHERE application_alias = ? ORDER BY deployed_at DESC LIMIT ?
+)`, applicationAlias, applicationAlias, keep)
+	return err
+}
+
+func scanDeployment(scanner interface {
+	Scan(dest ...any) error
+}) (deployment.HistoryRecord, error) {
+	var record deployment.HistoryRecord
+	var deployedAt, createdAt string
+	if err := scanner.Scan(
+		&record.ID,
+		&record.ApplicationAlias,
+		&record.Version,
+		&deployedAt,
+		&record.DeploymentType,
+		&record.TriggeredBy,
+		&record.ImageDigest,
+		&record.CommitHash,
+		&record.Status,
+		&record.PreviousVersion,
+		&record.NextVersion,
+		&record.Metadata,
+		&createdAt,
+	); err != nil {
+		return deployment.HistoryRecord{}, err
+	}
+	record.DeployedAt, _ = time.Parse(time.RFC3339Nano, deployedAt)
+	record.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdAt)
+	return record, nil
 }
 
 func (s *Store) Append(ctx context.Context, e audit.Event) error {

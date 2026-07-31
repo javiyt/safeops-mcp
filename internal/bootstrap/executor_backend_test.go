@@ -275,6 +275,44 @@ func TestExecutorBackendQuadletUsesConfiguredSystemdScope(t *testing.T) {
 	}
 }
 
+func TestExecutorBackendContainerUpdateRollsBackOnHealthFailure(t *testing.T) {
+	backend := testBackend()
+	backend.Config.Podman = config.PodmanConfig{Enabled: true, Binary: "/usr/bin/podman", Mode: "rootless", RegistryWhitelist: []string{"ghcr.io"}}
+	backend.Config.Limits = config.LimitsConfig{MaxHealthcheckAttempts: 3}
+	backend.Config.Containers = map[string]config.ContainerConfig{
+		"container-alpha": {
+			ContainerName: "app-alpha-container",
+			Management:    "podman",
+			Permissions:   config.PermissionsConfig{Status: "allow", Logs: "allow", Restart: "confirm"},
+			Health:        config.ContainerHealthConfig{RequireHealthyAfterRestart: true},
+		},
+	}
+	backend.Config.Applications = map[string]config.ApplicationConfig{
+		"app-service": {
+			Kind:          "container",
+			ContainerName: "container-alpha",
+			Management:    "podman",
+			Repository:    config.ApplicationRepositoryConfig{Type: "container-registry"},
+			Image:         config.ApplicationImageConfig{Registry: "ghcr.io", Repository: "example/app-service", Channel: "stable", DigestRequired: true},
+			Permissions:   config.ApplicationPermissionsConfig{Check: "allow", Update: "confirm", Rollback: "confirm"},
+			Rollback:      config.ApplicationRollbackConfig{Enabled: true, VersionsToKeep: 5},
+		},
+	}
+	backend.Podman = &fakePodman{
+		status:        ports.ContainerStatus{Exists: true, State: "running", Health: "starting", Image: "stable", ImageID: "sha256:previous"},
+		digest:        "sha256:next",
+		health:        "unhealthy",
+		waitHealthErr: errors.New("container unhealthy"),
+	}
+	out, err := backend.UpdateApplication(context.Background(), ports.UpdateApplicationRequest{Application: "app-service", OperationID: "op_1", TargetVersion: "stable", TargetDigest: "sha256:next"})
+	if err == nil {
+		t.Fatal("UpdateApplication() error = nil, want health failure")
+	}
+	if !out.RollbackAttempted || out.RollbackStatus == "" {
+		t.Fatalf("rollback result = %+v", out)
+	}
+}
+
 func testBackend() ExecutorBackend {
 	cfg := config.Config{
 		Filesystem: config.FilesystemConfig{DiskPaths: map[string]config.DiskPathConfig{"root": {Path: "/"}}},
@@ -298,6 +336,7 @@ func testBackend() ExecutorBackend {
 		Journal:     fakeJournal{},
 		Healthcheck: fakeHealthcheck{},
 		Podman:      &fakePodman{},
+		Git:         &fakeGit{},
 	}
 }
 
@@ -370,6 +409,8 @@ func (fakeHealthcheck) Check(context.Context, string, time.Duration, int, time.D
 type fakePodman struct {
 	status          ports.ContainerStatus
 	health          string
+	digest          string
+	pulled          []string
 	waitHealthErr   error
 	restartErr      error
 	runningErr      error
@@ -413,4 +454,45 @@ func (p *fakePodman) WaitForHealth(context.Context, string, string, string, int,
 		return p.health, 1, p.waitHealthErr
 	}
 	return "healthy", 1, nil
+}
+func (p *fakePodman) RemoteImageDigest(context.Context, string) (string, error) {
+	if p.digest != "" {
+		return p.digest, nil
+	}
+	return "sha256:next", nil
+}
+func (p *fakePodman) PullImage(_ context.Context, image string) (string, error) {
+	p.pulled = append(p.pulled, image)
+	if p.digest != "" {
+		return p.digest, nil
+	}
+	return "sha256:next", nil
+}
+
+type fakeGit struct {
+	current string
+	remote  string
+	fetched bool
+	checked string
+}
+
+func (g *fakeGit) RemoteCommit(context.Context, string, string) (string, error) {
+	if g.remote != "" {
+		return g.remote, nil
+	}
+	return "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", nil
+}
+func (g *fakeGit) CurrentCommit(context.Context, string) (string, error) {
+	if g.current != "" {
+		return g.current, nil
+	}
+	return "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", nil
+}
+func (g *fakeGit) Fetch(context.Context, string, string) error {
+	g.fetched = true
+	return nil
+}
+func (g *fakeGit) CheckoutCommit(_ context.Context, _, commit string) error {
+	g.checked = commit
+	return nil
 }

@@ -56,6 +56,7 @@ SafeOps builds these binaries:
 - Proactive alerts for services, containers, executor availability, SQLite state, disk, memory, CPU, and repeated application errors.
 - Alert state management with cooldowns, persistence thresholds, temporary silences, resolution notifications, SQLite persistence, MCP tools, and CLI commands.
 - Controlled maintenance operations for configured group restarts, configured log rotation, configured cache cleanup, SafeOps record retention, systemd failed-state reset, and opt-in host reboot.
+- Controlled application updates and rollbacks for configured services and containers, with approval, fixed Git branches or image channels, digest verification, health checks, automatic rollback on update failure, and SQLite deployment history.
 
 ## Configuration
 
@@ -225,6 +226,51 @@ host_reboot:
   confirmation_window: 5m
 ```
 
+Application deployments are also opt-in and alias based. SafeOps updates only configured applications and never accepts a free image reference, tag, Git repository, branch, path, or command from Telegram:
+
+```yaml
+podman:
+  registry_whitelist: [ghcr.io]
+applications:
+  app-service:
+    kind: service
+    service_name: service-alpha
+    management: systemd
+    repository:
+      type: git
+      url: https://example.invalid/org/app-service
+      branch: main
+      path: /opt/app-service
+      whitelist: [https://example.invalid/org/app-service]
+    version:
+      file: /opt/app-service/VERSION
+    rollback:
+      enabled: true
+      versions_to_keep: 5
+    permissions:
+      check: allow
+      update: confirm
+      rollback: confirm
+  example-container:
+    kind: container
+    container_name: container-alpha
+    management: podman
+    repository:
+      type: container-registry
+    image:
+      registry: ghcr.io
+      repository: example/app-service
+      channel: stable
+      digest_required: true
+    rollback:
+      enabled: true
+      versions_to_keep: 5
+    permissions:
+      check: allow
+      update: confirm
+      rollback: confirm
+```
+
 ## Running
 
 Run the executor on the host:
@@ -268,6 +314,11 @@ safeopsctl cache cleanup app-worker --dry-run --config /etc/safeops/config.yaml
 safeopsctl records cleanup --max-age 90d --min-records 1000 --dry-run --config /etc/safeops/config.yaml
 safeopsctl reset-failed service-alpha --dry-run --config /etc/safeops/config.yaml
 safeopsctl reboot --delay 5m --dry-run --config /etc/safeops/config.yaml
+safeopsctl app version app-service --config /etc/safeops/config.yaml
+safeopsctl app check-update app-service --config /etc/safeops/config.yaml
+safeopsctl app update app-service --dry-run --config /etc/safeops/config.yaml
+safeopsctl app rollback app-service --version 1.0.0 --dry-run --config /etc/safeops/config.yaml
+safeopsctl app history app-service --config /etc/safeops/config.yaml
 ```
 
 ## OpenClaw
@@ -322,6 +373,14 @@ User: Restart the entire application stack.
 
 Agent: I will restart `container-gamma`, `service-alpha`, and `workload-alpha` in the configured order. Reply with the confirmation code before it expires.
 
+User: Is there a new version of `app-service`?
+
+Agent: `app-service` is currently version 1.0.0. Version 1.0.1 is available from the configured branch.
+
+User: Update `app-service`.
+
+Agent: Updating `app-service` requires confirmation. SafeOps will use only the configured repository and branch, restart the service, run the configured health check, and roll back automatically if the health check fails. Reply with the confirmation code before it expires.
+
 ## Dry-Run
 
 When `policies.dry_run` is enabled, read tools behave normally. Confirmed mutable actions are simulated, audited as simulated, and return the operation that would have been performed.
@@ -332,9 +391,9 @@ Approvals and audit events are stored in SQLite. Confirmation codes are hashed b
 
 ## Roadmap
 
-Possible future work includes controlled image updates, controlled deployments, metrics, Loki, alerts, multi-host operation, additional MCP clients, per-user policies, stronger authentication, request signing, and remote executors over mTLS.
+Possible future work includes backups and recovery, metrics, Loki, multi-host operation, additional MCP clients, per-user policies, stronger authentication, request signing, and remote executors over mTLS.
 
-SafeOps does not allow shell access, `podman exec`, image pulls, container creation or removal, prune operations, Docker, Kubernetes, Podman socket access, arbitrary Quadlet file edits, or operations on resources that are not configured by alias.
+SafeOps does not allow shell access, `podman exec`, arbitrary image pulls, container creation or removal, prune operations, Docker, Kubernetes, Podman socket access, arbitrary Quadlet file edits, or operations on resources that are not configured by alias.
 
 ## Contributing
 

@@ -14,6 +14,7 @@ import (
 	cpuadapter "github.com/javiyt/safeops-mcp/internal/adapters/outbound/linux/cpu"
 	"github.com/javiyt/safeops-mcp/internal/adapters/outbound/linux/disk"
 	"github.com/javiyt/safeops-mcp/internal/adapters/outbound/linux/diskhealth"
+	gitadapter "github.com/javiyt/safeops-mcp/internal/adapters/outbound/linux/git"
 	"github.com/javiyt/safeops-mcp/internal/adapters/outbound/linux/healthcheck"
 	"github.com/javiyt/safeops-mcp/internal/adapters/outbound/linux/hoststatus"
 	"github.com/javiyt/safeops-mcp/internal/adapters/outbound/linux/journal"
@@ -68,6 +69,8 @@ func run() error {
 		Journal:     journal.Reader{Runner: runner},
 		Healthcheck: healthcheck.Client{MaxBodyBytes: 4096},
 		Podman:      podmanadapter.Client{Binary: cfg.Podman.Binary, Runner: runner},
+		Git:         gitadapter.Client{Runner: runner},
+		Runner:      runner,
 		Rebooter:    reboot.Client{Command: cfg.HostReboot.RebootCommand, CancelCommand: cfg.HostReboot.CancelCommand, Runner: runner},
 	}
 	return (&executorhttp.Server{Config: cfg, Backend: backend, Logger: logger}).ListenAndServe(ctx)

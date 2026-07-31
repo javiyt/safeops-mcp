@@ -129,6 +129,8 @@ podman:
   binary: /usr/bin/podman
   mode: rootless
   systemd_scope: user
+  registry_whitelist:
+    - ghcr.io
 services:
   service-alpha:
     unit: app-alpha.service
@@ -208,6 +210,54 @@ groups:
     timeout: 60s
     health_check: true
 applications:
+  app-service:
+    kind: service
+    service_name: service-alpha
+    management: systemd
+    repository:
+      type: git
+      url: https://example.invalid/org/app-service
+      branch: main
+      path: /opt/app-service
+      whitelist:
+        - https://example.invalid/org/app-service
+    version:
+      file: /opt/app-service/VERSION
+    health:
+      type: service
+      require_healthy_after_update: true
+      attempts: 5
+      interval: 2s
+    rollback:
+      enabled: true
+      versions_to_keep: 5
+    permissions:
+      check: allow
+      update: confirm
+      rollback: confirm
+  example-container:
+    kind: container
+    container_name: container-alpha
+    management: podman
+    repository:
+      type: container-registry
+    image:
+      registry: ghcr.io
+      repository: example/app-service
+      channel: stable
+      digest_required: true
+    health:
+      type: container
+      require_healthy_after_update: true
+      attempts: 5
+      interval: 2s
+    rollback:
+      enabled: true
+      versions_to_keep: 5
+    permissions:
+      check: allow
+      update: confirm
+      rollback: confirm
   app-worker:
     cache_path: /var/cache/app-worker
     cleanup:

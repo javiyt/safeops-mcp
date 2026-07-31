@@ -10,6 +10,7 @@ import (
 	"github.com/javiyt/safeops-mcp/internal/domain/alert"
 	"github.com/javiyt/safeops-mcp/internal/domain/approval"
 	"github.com/javiyt/safeops-mcp/internal/domain/audit"
+	"github.com/javiyt/safeops-mcp/internal/domain/deployment"
 )
 
 func TestMigrationsAreIdempotentAndApprovalCannotExecuteTwice(t *testing.T) {
@@ -114,6 +115,38 @@ func TestApprovalMarkDoneAndExpiredMarkExecuting(t *testing.T) {
 	}
 	if got.Status != approval.StatusExecuted || got.ExecutedAt == nil {
 		t.Fatalf("Get() = %+v", got)
+	}
+}
+
+func TestDeploymentHistoryRepository(t *testing.T) {
+	store := migratedStore(t)
+	ctx := context.Background()
+	now := time.Date(2026, 7, 24, 10, 0, 0, 0, time.UTC)
+	records := []deployment.HistoryRecord{
+		{ID: "dep_1", ApplicationAlias: "app-service", Version: "1.0.0", DeployedAt: now, DeploymentType: "update", TriggeredBy: "operator", Status: "success", CreatedAt: now},
+		{ID: "dep_2", ApplicationAlias: "app-service", Version: "1.0.1", DeployedAt: now.Add(time.Minute), DeploymentType: "update", TriggeredBy: "operator", Status: "success", PreviousVersion: "1.0.0", CommitHash: "commit-next", CreatedAt: now.Add(time.Minute)},
+	}
+	for _, record := range records {
+		if err := store.AppendDeployment(ctx, record); err != nil {
+			t.Fatal(err)
+		}
+	}
+	latest, err := store.LatestSuccessfulDeployment(ctx, "app-service")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if latest.Version != "1.0.1" || latest.CommitHash != "commit-next" {
+		t.Fatalf("latest = %+v", latest)
+	}
+	if err := store.PruneDeployments(ctx, "app-service", 1); err != nil {
+		t.Fatal(err)
+	}
+	items, err := store.ListDeployments(ctx, "app-service", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].ID != "dep_2" {
+		t.Fatalf("items = %+v", items)
 	}
 }
 

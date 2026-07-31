@@ -224,10 +224,11 @@ type HealthcheckConfig struct {
 }
 
 type PodmanConfig struct {
-	Enabled      bool   `yaml:"enabled"`
-	Binary       string `yaml:"binary"`
-	Mode         string `yaml:"mode"`
-	SystemdScope string `yaml:"systemd_scope"`
+	Enabled           bool     `yaml:"enabled"`
+	Binary            string   `yaml:"binary"`
+	Mode              string   `yaml:"mode"`
+	SystemdScope      string   `yaml:"systemd_scope"`
+	RegistryWhitelist []string `yaml:"registry_whitelist"`
 }
 
 type ContainerConfig struct {
@@ -263,8 +264,64 @@ type LogRotationConfig struct {
 }
 
 type ApplicationConfig struct {
-	CachePath string                `yaml:"cache_path"`
-	Cleanup   ResourceCleanupConfig `yaml:"cleanup"`
+	CachePath     string                         `yaml:"cache_path"`
+	Cleanup       ResourceCleanupConfig          `yaml:"cleanup"`
+	Kind          string                         `yaml:"kind"`
+	ServiceName   string                         `yaml:"service_name"`
+	ContainerName string                         `yaml:"container_name"`
+	Management    string                         `yaml:"management"`
+	Repository    ApplicationRepositoryConfig    `yaml:"repository"`
+	Image         ApplicationImageConfig         `yaml:"image"`
+	Health        ApplicationHealthConfig        `yaml:"health"`
+	Rollback      ApplicationRollbackConfig      `yaml:"rollback"`
+	Permissions   ApplicationPermissionsConfig   `yaml:"permissions"`
+	Version       ApplicationVersionSourceConfig `yaml:"version"`
+	PostUpdate    []ApplicationCommandConfig     `yaml:"post_update"`
+}
+
+type ApplicationRepositoryConfig struct {
+	Type      string   `yaml:"type"`
+	URL       string   `yaml:"url"`
+	Branch    string   `yaml:"branch"`
+	Path      string   `yaml:"path"`
+	Whitelist []string `yaml:"whitelist"`
+}
+
+type ApplicationImageConfig struct {
+	Registry       string `yaml:"registry"`
+	Repository     string `yaml:"repository"`
+	Channel        string `yaml:"channel"`
+	DigestRequired bool   `yaml:"digest_required"`
+}
+
+type ApplicationHealthConfig struct {
+	Type                      string   `yaml:"type"`
+	RequireHealthyAfterUpdate bool     `yaml:"require_healthy_after_update"`
+	Attempts                  int      `yaml:"attempts"`
+	Interval                  Duration `yaml:"interval"`
+}
+
+type ApplicationRollbackConfig struct {
+	Enabled        bool `yaml:"enabled"`
+	VersionsToKeep int  `yaml:"versions_to_keep"`
+}
+
+type ApplicationPermissionsConfig struct {
+	Update   string `yaml:"update"`
+	Rollback string `yaml:"rollback"`
+	Check    string `yaml:"check"`
+}
+
+type ApplicationVersionSourceConfig struct {
+	File    string   `yaml:"file"`
+	Command string   `yaml:"command"`
+	Args    []string `yaml:"args"`
+}
+
+type ApplicationCommandConfig struct {
+	Command string   `yaml:"command"`
+	Args    []string `yaml:"args"`
+	Dir     string   `yaml:"dir"`
 }
 
 type ResourceCleanupConfig struct {
@@ -687,14 +744,18 @@ func validateMaintenance(errs *[]error, cfg Config) {
 		if !validAlias(alias) {
 			*errs = append(*errs, fmt.Errorf("applications[%q] has an invalid alias", alias))
 		}
-		if strings.TrimSpace(app.CachePath) == "" {
+		hasDeployment := strings.TrimSpace(app.Kind) != "" || strings.TrimSpace(app.Repository.Type) != "" || strings.TrimSpace(app.Image.Registry) != ""
+		if strings.TrimSpace(app.CachePath) == "" && (!hasDeployment || app.Cleanup.Enabled) {
 			*errs = append(*errs, fmt.Errorf("applications[%q].cache_path is required", alias))
-		} else if !filepath.IsAbs(app.CachePath) {
+		} else if strings.TrimSpace(app.CachePath) != "" && !filepath.IsAbs(app.CachePath) {
 			*errs = append(*errs, fmt.Errorf("applications[%q].cache_path must be absolute", alias))
 		}
 		cleanup := mergeCleanup(app.Cleanup, cfg.CacheCleanup.Default)
 		if app.Cleanup.Enabled && (cleanup.MaxAge.Std() <= 0 || cleanup.MaxSize.Int64() <= 0 || cleanup.Timeout.Std() <= 0) {
 			*errs = append(*errs, fmt.Errorf("applications[%q].cleanup limits must be positive", alias))
+		}
+		if hasDeployment {
+			validateApplicationDeployment(errs, cfg, alias, app)
 		}
 	}
 	if cfg.HostReboot.Enabled {
@@ -711,6 +772,139 @@ func validateMaintenance(errs *[]error, cfg Config) {
 			*errs = append(*errs, errors.New("host_reboot.cancel_command must be absolute"))
 		}
 	}
+}
+
+func validateApplicationDeployment(errs *[]error, cfg Config, alias string, app ApplicationConfig) {
+	switch app.Kind {
+	case "service":
+		if strings.TrimSpace(app.ServiceName) == "" {
+			*errs = append(*errs, fmt.Errorf("applications[%q].service_name is required for service applications", alias))
+		} else if _, ok := cfg.Services[app.ServiceName]; !ok {
+			*errs = append(*errs, fmt.Errorf("applications[%q].service_name must reference a configured service alias", alias))
+		}
+	case "container":
+		if strings.TrimSpace(app.ContainerName) == "" {
+			*errs = append(*errs, fmt.Errorf("applications[%q].container_name is required for container applications", alias))
+		} else if _, ok := cfg.Containers[app.ContainerName]; !ok {
+			*errs = append(*errs, fmt.Errorf("applications[%q].container_name must reference a configured container alias", alias))
+		}
+	default:
+		*errs = append(*errs, fmt.Errorf("applications[%q].kind must be service or container", alias))
+	}
+	switch app.Management {
+	case "systemd", "podman", "quadlet":
+	case "":
+		*errs = append(*errs, fmt.Errorf("applications[%q].management is required", alias))
+	default:
+		*errs = append(*errs, fmt.Errorf("applications[%q].management is unknown", alias))
+	}
+	validateApplicationPermissions(errs, alias, app.Permissions)
+	validateApplicationRepository(errs, cfg, alias, app)
+	validateApplicationHealth(errs, cfg, alias, app.Health)
+	if app.Rollback.Enabled && (app.Rollback.VersionsToKeep <= 0 || app.Rollback.VersionsToKeep > 50) {
+		*errs = append(*errs, fmt.Errorf("applications[%q].rollback.versions_to_keep must be between 1 and 50", alias))
+	}
+	if app.Kind == "service" && strings.TrimSpace(app.Version.File) == "" && strings.TrimSpace(app.Version.Command) == "" && strings.TrimSpace(app.Repository.Path) == "" {
+		*errs = append(*errs, fmt.Errorf("applications[%q] must configure version.file, version.command, or repository.path", alias))
+	}
+	for i, cmd := range app.PostUpdate {
+		if !filepath.IsAbs(cmd.Command) {
+			*errs = append(*errs, fmt.Errorf("applications[%q].post_update[%d].command must be absolute", alias, i))
+		}
+		if strings.TrimSpace(cmd.Dir) != "" && !filepath.IsAbs(cmd.Dir) {
+			*errs = append(*errs, fmt.Errorf("applications[%q].post_update[%d].dir must be absolute", alias, i))
+		}
+		for _, arg := range cmd.Args {
+			if strings.ContainsAny(arg, "\x00\r\n") {
+				*errs = append(*errs, fmt.Errorf("applications[%q].post_update[%d].args contains an invalid argument", alias, i))
+			}
+		}
+	}
+}
+
+func validateApplicationPermissions(errs *[]error, alias string, perms ApplicationPermissionsConfig) {
+	switch perms.Check {
+	case "allow":
+	case "":
+		*errs = append(*errs, fmt.Errorf("applications[%q].permissions.check is required", alias))
+	default:
+		*errs = append(*errs, fmt.Errorf("applications[%q].permissions.check must be allow", alias))
+	}
+	for name, value := range map[string]string{"update": perms.Update, "rollback": perms.Rollback} {
+		switch value {
+		case "confirm", "deny":
+		case "":
+			*errs = append(*errs, fmt.Errorf("applications[%q].permissions.%s is required", alias, name))
+		default:
+			*errs = append(*errs, fmt.Errorf("applications[%q].permissions.%s must be confirm or deny", alias, name))
+		}
+	}
+}
+
+func validateApplicationRepository(errs *[]error, cfg Config, alias string, app ApplicationConfig) {
+	switch app.Repository.Type {
+	case "git":
+		if strings.TrimSpace(app.Repository.URL) == "" {
+			*errs = append(*errs, fmt.Errorf("applications[%q].repository.url is required", alias))
+		} else if _, err := url.ParseRequestURI(app.Repository.URL); err != nil {
+			*errs = append(*errs, fmt.Errorf("applications[%q].repository.url is invalid", alias))
+		}
+		if strings.TrimSpace(app.Repository.Branch) == "" || strings.ContainsAny(app.Repository.Branch, " \t\r\n~^:?*[\\") {
+			*errs = append(*errs, fmt.Errorf("applications[%q].repository.branch is invalid", alias))
+		}
+		if strings.TrimSpace(app.Repository.Path) != "" && !filepath.IsAbs(app.Repository.Path) {
+			*errs = append(*errs, fmt.Errorf("applications[%q].repository.path must be absolute", alias))
+		}
+		if !applicationRepositoryAllowed(app.Repository.URL, app.Repository.Whitelist) {
+			*errs = append(*errs, fmt.Errorf("applications[%q].repository.url is not whitelisted", alias))
+		}
+	case "container-registry":
+		if app.Image.Registry == "" || app.Image.Repository == "" || app.Image.Channel == "" {
+			*errs = append(*errs, fmt.Errorf("applications[%q].image registry, repository, and channel are required", alias))
+		}
+		if !validRegistryName(app.Image.Registry) || strings.ContainsAny(app.Image.Repository, " \t\r\n") || strings.ContainsAny(app.Image.Channel, " \t\r\n:@") {
+			*errs = append(*errs, fmt.Errorf("applications[%q].image contains invalid fields", alias))
+		}
+		if len(cfg.Podman.RegistryWhitelist) > 0 && !stringAllowed(app.Image.Registry, cfg.Podman.RegistryWhitelist) {
+			*errs = append(*errs, fmt.Errorf("applications[%q].image.registry is not whitelisted", alias))
+		}
+	default:
+		*errs = append(*errs, fmt.Errorf("applications[%q].repository.type must be git or container-registry", alias))
+	}
+}
+
+func validateApplicationHealth(errs *[]error, cfg Config, alias string, health ApplicationHealthConfig) {
+	if health.Type == "" {
+		return
+	}
+	switch health.Type {
+	case "service", "container", "http":
+	default:
+		*errs = append(*errs, fmt.Errorf("applications[%q].health.type is unknown", alias))
+	}
+	if health.Attempts < 0 || health.Attempts > cfg.Limits.MaxHealthcheckAttempts {
+		*errs = append(*errs, fmt.Errorf("applications[%q].health.attempts is outside configured limits", alias))
+	}
+	if health.Interval.Std() < 0 {
+		*errs = append(*errs, fmt.Errorf("applications[%q].health.interval must not be negative", alias))
+	}
+}
+
+func applicationRepositoryAllowed(raw string, whitelist []string) bool {
+	return len(whitelist) == 0 || stringAllowed(raw, whitelist)
+}
+
+func stringAllowed(value string, whitelist []string) bool {
+	for _, allowed := range whitelist {
+		if value == allowed {
+			return true
+		}
+	}
+	return false
+}
+
+func validRegistryName(value string) bool {
+	return regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,255}$`).MatchString(value)
 }
 
 func validateLogConfig(errs *[]error, name, path string, local, def ResourceLogRotationConfig) {

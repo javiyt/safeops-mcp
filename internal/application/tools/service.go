@@ -16,21 +16,23 @@ import (
 	"github.com/javiyt/safeops-mcp/internal/domain/alert"
 	"github.com/javiyt/safeops-mcp/internal/domain/approval"
 	"github.com/javiyt/safeops-mcp/internal/domain/audit"
+	"github.com/javiyt/safeops-mcp/internal/domain/deployment"
 	"github.com/javiyt/safeops-mcp/internal/domain/policy"
 	"github.com/javiyt/safeops-mcp/internal/ports"
 	"github.com/javiyt/safeops-mcp/internal/redaction"
 )
 
 type Service struct {
-	Config    config.Config
-	Executor  ports.ExecutorClient
-	Approvals ports.ApprovalRepository
-	Alerts    ports.AlertRepository
-	Audit     ports.AuditRepository
-	Clock     ports.Clock
-	IDs       ports.IDGenerator
-	Codes     ports.CodeGenerator
-	Policy    policy.Engine
+	Config      config.Config
+	Executor    ports.ExecutorClient
+	Approvals   ports.ApprovalRepository
+	Alerts      ports.AlertRepository
+	Deployments ports.DeploymentRepository
+	Audit       ports.AuditRepository
+	Clock       ports.Clock
+	IDs         ports.IDGenerator
+	Codes       ports.CodeGenerator
+	Policy      policy.Engine
 }
 
 type RequestRestartInput struct {
@@ -76,6 +78,22 @@ type ResetFailureStateInput struct {
 type RequestHostRebootInput struct {
 	Reason string `json:"reason"`
 	Delay  string `json:"delay"`
+}
+
+type ApplicationInput struct {
+	Application string `json:"application"`
+}
+
+type RequestApplicationUpdateInput struct {
+	Application string `json:"application"`
+	Reason      string `json:"reason"`
+	Version     string `json:"version"`
+}
+
+type RequestApplicationRollbackInput struct {
+	Application string `json:"application"`
+	Reason      string `json:"reason"`
+	Version     string `json:"version"`
 }
 
 type RequestRestartOutput struct {
@@ -244,6 +262,99 @@ func (s Service) SilenceAlert(ctx context.Context, userID string, input SilenceA
 
 func (s Service) ListServices(ctx context.Context) ([]ports.ServiceSummary, error) {
 	return s.Executor.ListServices(ctx)
+}
+
+func (s Service) ApplicationVersion(ctx context.Context, userID string, input ApplicationInput) (ports.ApplicationVersionResponse, error) {
+	if !s.applicationPermission(input.Application, "check", "allow") {
+		return ports.ApplicationVersionResponse{}, fmt.Errorf("application %q is not allowed for version checks", input.Application)
+	}
+	out, err := s.Executor.ApplicationVersion(ctx, ports.ApplicationVersionRequest{Application: input.Application})
+	if err == nil {
+		err = s.audit(ctx, userID, "application_version_read", "application_version", "read_application_version", fmt.Sprintf(`{"application":%q}`, input.Application), "read", "allow", "completed", "", "")
+	}
+	return out, err
+}
+
+func (s Service) CheckApplicationUpdate(ctx context.Context, userID string, input ApplicationInput) (ports.ApplicationUpdateCheckResponse, error) {
+	if !s.applicationPermission(input.Application, "check", "allow") {
+		return ports.ApplicationUpdateCheckResponse{}, fmt.Errorf("application %q is not allowed for update checks", input.Application)
+	}
+	out, err := s.Executor.CheckApplicationUpdate(ctx, ports.ApplicationVersionRequest{Application: input.Application})
+	if err == nil {
+		err = s.audit(ctx, userID, "application_update_checked", "check_application_update", "check_application_update", fmt.Sprintf(`{"application":%q}`, input.Application), "read", "allow", "completed", "", "")
+	}
+	return out, err
+}
+
+func (s Service) RequestApplicationUpdate(ctx context.Context, userID string, input RequestApplicationUpdateInput) (RequestRestartOutput, error) {
+	if !s.applicationPermission(input.Application, "update", "confirm") {
+		return RequestRestartOutput{}, fmt.Errorf("application %q does not permit update requests", input.Application)
+	}
+	check, err := s.Executor.CheckApplicationUpdate(ctx, ports.ApplicationVersionRequest{Application: input.Application})
+	if err != nil {
+		return RequestRestartOutput{}, err
+	}
+	if input.Version != "" && input.Version != check.AvailableVersion {
+		return RequestRestartOutput{}, fmt.Errorf("requested version %q is not the configured available version", input.Version)
+	}
+	extra := map[string]any{
+		"current_version": check.CurrentVersion,
+		"target_version":  firstNonEmpty(input.Version, check.AvailableVersion),
+		"target_digest":   check.AvailableDigest,
+		"target_commit":   check.AvailableCommit,
+	}
+	return s.requestApproval(ctx, userID, "request_application_update", action.TypeUpdateApplication, action.ResourceApplication, input.Application, input.Reason, extra, "high", "Update application "+input.Application, "The application workload will restart and may be unavailable for a few seconds.")
+}
+
+func (s Service) RequestApplicationRollback(ctx context.Context, userID string, input RequestApplicationRollbackInput) (RequestRestartOutput, error) {
+	app, ok := s.Config.Applications[input.Application]
+	if !ok || !app.Rollback.Enabled {
+		return RequestRestartOutput{}, fmt.Errorf("application %q does not enable rollback", input.Application)
+	}
+	if !s.applicationPermission(input.Application, "rollback", "confirm") {
+		return RequestRestartOutput{}, fmt.Errorf("application %q does not permit rollback requests", input.Application)
+	}
+	if s.Deployments == nil {
+		return RequestRestartOutput{}, errors.New("deployment history repository is not configured")
+	}
+	target := deployment.HistoryRecord{}
+	if input.Version != "" {
+		history, err := s.Deployments.ListDeployments(ctx, input.Application, 50)
+		if err != nil {
+			return RequestRestartOutput{}, err
+		}
+		for _, record := range history {
+			if record.Status == "success" && record.Version == input.Version {
+				target = record
+				break
+			}
+		}
+		if target.ID == "" {
+			return RequestRestartOutput{}, fmt.Errorf("version %q is not recorded for rollback", input.Version)
+		}
+	} else {
+		record, err := s.Deployments.LatestSuccessfulDeployment(ctx, input.Application)
+		if err != nil {
+			return RequestRestartOutput{}, err
+		}
+		target = record
+	}
+	extra := map[string]any{"target_version": target.Version, "target_digest": target.ImageDigest, "target_commit": target.CommitHash}
+	return s.requestApproval(ctx, userID, "request_application_rollback", action.TypeRollbackApplication, action.ResourceApplication, input.Application, input.Reason, extra, "high", "Rollback application "+input.Application, "The application workload will restart using a previously recorded version.")
+}
+
+func (s Service) ApplicationHistory(ctx context.Context, userID string, input ApplicationInput) (map[string][]deployment.HistoryRecord, error) {
+	if !s.applicationPermission(input.Application, "check", "allow") {
+		return nil, fmt.Errorf("application %q is not allowed for history checks", input.Application)
+	}
+	if s.Deployments == nil {
+		return nil, errors.New("deployment history repository is not configured")
+	}
+	items, err := s.Deployments.ListDeployments(ctx, input.Application, 20)
+	if err == nil {
+		err = s.audit(ctx, userID, "application_history_read", "application_history", "read_application_history", fmt.Sprintf(`{"application":%q}`, input.Application), "read", "allow", "completed", "", "")
+	}
+	return map[string][]deployment.HistoryRecord{"history": items}, err
 }
 
 func (s Service) ServiceStatus(ctx context.Context, alias string) (any, error) {
@@ -473,6 +584,9 @@ func (s Service) ConfirmAction(ctx context.Context, userID string, input Confirm
 	if err := s.validateActionAllowed(action.ResourceKind(a.ResourceKind), a.ResourceAlias); err != nil {
 		return ConfirmOutput{}, err
 	}
+	if err := s.validateApplicationApprovalStillAllowed(a); err != nil {
+		return ConfirmOutput{}, err
+	}
 	extra := argumentExtra(a.NormalizedArguments)
 	normalized, err := normalizeAction(action.Type(a.Action), action.ResourceKind(a.ResourceKind), a.ResourceAlias, argumentReason(a.NormalizedArguments), userID, s.Config.Policies.DryRun, extra)
 	if err != nil {
@@ -497,9 +611,12 @@ func (s Service) ConfirmAction(ctx context.Context, userID string, input Confirm
 		_ = s.Approvals.ReleaseOperationLock(context.Background(), a.ResourceKind, a.ResourceAlias, opID)
 	}()
 	out, err := s.executeApproved(ctx, a, opID)
+	if err == nil {
+		err = s.recordDeploymentResult(ctx, userID, a, out)
+	}
 	status := approval.StatusExecuted
 	errorSummary := ""
-	resultSummary := "restart executed"
+	resultSummary := string(action.Type(a.Action)) + " executed"
 	if s.Config.Policies.DryRun {
 		status = approval.StatusSimulated
 		resultSummary = "restart simulated"
@@ -562,6 +679,28 @@ func (s Service) executeApproved(ctx context.Context, a approval.Approval, opID 
 			delay = v
 		}
 		return s.Executor.RebootHost(ctx, ports.RebootHostRequest{Delay: delay, OperationID: opID, DryRun: s.Config.Policies.DryRun})
+	case action.TypeUpdateApplication:
+		extra := argumentExtra(a.NormalizedArguments)
+		return s.Executor.UpdateApplication(ctx, ports.UpdateApplicationRequest{
+			Application:   a.ResourceAlias,
+			OperationID:   opID,
+			TargetVersion: stringExtra(extra, "target_version"),
+			TargetDigest:  stringExtra(extra, "target_digest"),
+			TargetCommit:  stringExtra(extra, "target_commit"),
+			TriggeredBy:   a.UserID,
+			DryRun:        s.Config.Policies.DryRun,
+		})
+	case action.TypeRollbackApplication:
+		extra := argumentExtra(a.NormalizedArguments)
+		return s.Executor.RollbackApplication(ctx, ports.RollbackApplicationRequest{
+			Application:   a.ResourceAlias,
+			OperationID:   opID,
+			TargetVersion: stringExtra(extra, "target_version"),
+			TargetDigest:  stringExtra(extra, "target_digest"),
+			TargetCommit:  stringExtra(extra, "target_commit"),
+			TriggeredBy:   a.UserID,
+			DryRun:        s.Config.Policies.DryRun,
+		})
 	default:
 		return nil, fmt.Errorf("action %q is not supported", a.Action)
 	}
@@ -586,6 +725,8 @@ func confirmOutput(out any) ConfirmOutput {
 		return ConfirmOutput{Status: v.Status, Action: string(action.TypeResetFailure), ResourceKind: v.ResourceKind, Resource: v.Resource, Result: v, WouldRun: v.WouldRun}
 	case ports.RebootHostResponse:
 		return ConfirmOutput{Status: v.Status, Action: v.Action, ResourceKind: "host", Resource: "host", Result: v, WouldRun: v.WouldRun}
+	case ports.ApplicationDeploymentResponse:
+		return ConfirmOutput{Status: v.Status, Action: v.Action, ResourceKind: "application", Resource: v.Application, Result: v, WouldRun: strings.Join(v.WouldRun, "\n")}
 	default:
 		return ConfirmOutput{Status: "unknown"}
 	}
@@ -803,8 +944,91 @@ func (s Service) validateActionAllowed(kind action.ResourceKind, alias string) e
 		if !s.Config.HostReboot.Enabled || alias != "host" {
 			return errors.New("host reboot is disabled")
 		}
+	case action.ResourceApplication:
+		app, ok := s.Config.Applications[alias]
+		if !ok || app.Kind == "" {
+			return fmt.Errorf("application %q is not configured for deployments", alias)
+		}
 	default:
 		return fmt.Errorf("resource kind %q is not supported", kind)
+	}
+	return nil
+}
+
+func (s Service) validateApplicationApprovalStillAllowed(a approval.Approval) error {
+	if action.ResourceKind(a.ResourceKind) != action.ResourceApplication {
+		return nil
+	}
+	switch action.Type(a.Action) {
+	case action.TypeUpdateApplication:
+		if !s.applicationPermission(a.ResourceAlias, "update", "confirm") {
+			return fmt.Errorf("application %q no longer permits update requests", a.ResourceAlias)
+		}
+	case action.TypeRollbackApplication:
+		if !s.applicationPermission(a.ResourceAlias, "rollback", "confirm") {
+			return fmt.Errorf("application %q no longer permits rollback requests", a.ResourceAlias)
+		}
+	default:
+		return fmt.Errorf("application action %q is not supported", a.Action)
+	}
+	return nil
+}
+
+func (s Service) applicationPermission(alias, name, expected string) bool {
+	app, ok := s.Config.Applications[alias]
+	if !ok || app.Kind == "" {
+		return false
+	}
+	switch name {
+	case "check":
+		return app.Permissions.Check == expected
+	case "update":
+		return app.Permissions.Update == expected
+	case "rollback":
+		return app.Permissions.Rollback == expected
+	default:
+		return false
+	}
+}
+
+func (s Service) recordDeploymentResult(ctx context.Context, userID string, a approval.Approval, out any) error {
+	result, ok := out.(ports.ApplicationDeploymentResponse)
+	if !ok || s.Deployments == nil || s.Config.Policies.DryRun {
+		return nil
+	}
+	deploymentType := "update"
+	if action.Type(a.Action) == action.TypeRollbackApplication {
+		deploymentType = "rollback"
+	}
+	id, err := s.IDs.NewID("dep")
+	if err != nil {
+		return err
+	}
+	now := s.Clock.Now()
+	status := "success"
+	if result.Status != "success" {
+		status = result.Status
+	}
+	record := deployment.HistoryRecord{
+		ID:               id,
+		ApplicationAlias: a.ResourceAlias,
+		Version:          firstNonEmpty(result.CurrentVersion, result.TargetVersion),
+		DeployedAt:       now,
+		DeploymentType:   deploymentType,
+		TriggeredBy:      userID,
+		ImageDigest:      result.ImageDigest,
+		CommitHash:       result.CommitHash,
+		Status:           status,
+		PreviousVersion:  result.PreviousVersion,
+		NextVersion:      result.TargetVersion,
+		CreatedAt:        now,
+	}
+	if err := s.Deployments.AppendDeployment(ctx, record); err != nil {
+		return err
+	}
+	app := s.Config.Applications[a.ResourceAlias]
+	if app.Rollback.VersionsToKeep > 0 {
+		return s.Deployments.PruneDeployments(ctx, a.ResourceAlias, app.Rollback.VersionsToKeep)
 	}
 	return nil
 }
@@ -854,6 +1078,22 @@ func containsString(values []string, target string) bool {
 		}
 	}
 	return false
+}
+
+func stringExtra(values map[string]any, key string) string {
+	if v, ok := values[key].(string); ok {
+		return v
+	}
+	return ""
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func allowedPriority(value string) bool {

@@ -22,14 +22,15 @@ func NewToolService(ctx context.Context, cfg config.Config, logger *slog.Logger)
 		return tools.Service{}, nil, err
 	}
 	return tools.Service{
-		Config:    cfg,
-		Executor:  executorclient.New(cfg.Socket.Path),
-		Approvals: store,
-		Alerts:    store,
-		Audit:     store,
-		Clock:     SystemClock{},
-		IDs:       CryptoIDGenerator{},
-		Codes:     CryptoCodeGenerator{},
-		Policy:    policy.Engine{DryRun: cfg.Policies.DryRun},
+		Config:      cfg,
+		Executor:    executorclient.New(cfg.Socket.Path),
+		Approvals:   store,
+		Alerts:      store,
+		Deployments: store,
+		Audit:       store,
+		Clock:       SystemClock{},
+		IDs:         CryptoIDGenerator{},
+		Codes:       CryptoCodeGenerator{},
+		Policy:      policy.Engine{DryRun: cfg.Policies.DryRun},
 	}, store.Close, nil
 }

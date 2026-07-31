@@ -111,7 +111,11 @@
             "list_containers",
             "container_status",
             "container_logs",
-            "request_container_restart"
+            "request_container_restart",
+            "application_version",
+            "check_application_update",
+            "request_application_update",
+            "request_application_rollback"
           ],
           "exclude": [
             "resources_*",

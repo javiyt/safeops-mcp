@@ -249,6 +249,30 @@ func (s Server) callTool(ctx context.Context, name string, args json.RawMessage)
 			return nil, err
 		}
 		return s.Tools.RequestHostReboot(ctx, s.UserID, in)
+	case "application_version":
+		var in tools.ApplicationInput
+		if err := json.Unmarshal(args, &in); err != nil {
+			return nil, err
+		}
+		return s.Tools.ApplicationVersion(ctx, s.UserID, in)
+	case "check_application_update":
+		var in tools.ApplicationInput
+		if err := json.Unmarshal(args, &in); err != nil {
+			return nil, err
+		}
+		return s.Tools.CheckApplicationUpdate(ctx, s.UserID, in)
+	case "request_application_update":
+		var in tools.RequestApplicationUpdateInput
+		if err := json.Unmarshal(args, &in); err != nil {
+			return nil, err
+		}
+		return s.Tools.RequestApplicationUpdate(ctx, s.UserID, in)
+	case "request_application_rollback":
+		var in tools.RequestApplicationRollbackInput
+		if err := json.Unmarshal(args, &in); err != nil {
+			return nil, err
+		}
+		return s.Tools.RequestApplicationRollback(ctx, s.UserID, in)
 	default:
 		return nil, fmt.Errorf("tool %q is not supported", name)
 	}
@@ -290,6 +314,10 @@ func toolDefinitions(podmanEnabled bool) []map[string]any {
 		tool("remove_expired_safeops_records", "Mutable SafeOps maintenance tool. Removes old audit and approval records only through configured retention and minimum-record limits. With dry_run true it simulates immediately; otherwise it creates an approval.", map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{"max_age": map[string]string{"type": "string"}, "min_records": map[string]string{"type": "integer"}, "dry_run": map[string]string{"type": "boolean"}, "reason": map[string]string{"type": "string"}}}),
 		tool("reset_resource_failure_state", "Mutable SafeOps maintenance tool. Resets systemd failed state for a configured service alias only. Containers return not_applicable; use request_container_restart for container remediation.", map[string]any{"type": "object", "required": []string{"resource"}, "additionalProperties": false, "properties": map[string]any{"resource": map[string]string{"type": "string"}, "dry_run": map[string]string{"type": "boolean"}, "reason": map[string]string{"type": "string"}}}),
 		tool("request_host_reboot", "Critical SafeOps maintenance tool. Creates a pending approval to reboot the host only when host_reboot is enabled, no mutable operation is in progress, and the configured user is allowed.", map[string]any{"type": "object", "required": []string{"reason"}, "additionalProperties": false, "properties": map[string]any{"reason": map[string]string{"type": "string"}, "delay": map[string]string{"type": "string"}}}),
+		tool("application_version", "Read-only SafeOps deployment tool. Returns current and configured available version information for a configured application alias only; it never accepts arbitrary image names, tags, branches, repositories, or commands.", map[string]any{"type": "object", "required": []string{"application"}, "additionalProperties": false, "properties": map[string]any{"application": map[string]string{"type": "string"}}}),
+		tool("check_application_update", "Read-only SafeOps deployment tool. Checks whether a configured application has an available update using only configured Git branches or image channels.", map[string]any{"type": "object", "required": []string{"application"}, "additionalProperties": false, "properties": map[string]any{"application": map[string]string{"type": "string"}}}),
+		tool("request_application_update", "Mutable SafeOps deployment tool. Creates a pending approval to update a configured application. It never accepts user-supplied image references, tags, branches, repositories, paths, or commands; execution occurs only after confirm_action succeeds.", map[string]any{"type": "object", "required": []string{"application", "reason"}, "additionalProperties": false, "properties": map[string]any{"application": map[string]string{"type": "string"}, "reason": map[string]string{"type": "string"}, "version": map[string]string{"type": "string"}}}),
+		tool("request_application_rollback", "Mutable SafeOps deployment tool. Creates a pending approval to roll back a configured application to a version already present in SafeOps deployment history; execution occurs only after confirm_action succeeds.", map[string]any{"type": "object", "required": []string{"application", "reason"}, "additionalProperties": false, "properties": map[string]any{"application": map[string]string{"type": "string"}, "reason": map[string]string{"type": "string"}, "version": map[string]string{"type": "string"}}}),
 	}
 	if podmanEnabled {
 		defs = append(defs,

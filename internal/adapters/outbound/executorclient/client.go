@@ -151,6 +151,26 @@ func (c Client) CancelHostReboot(ctx context.Context, req ports.RebootHostReques
 	return out, c.post(ctx, "/v1/maintenance/reboot/cancel", req, &out)
 }
 
+func (c Client) ApplicationVersion(ctx context.Context, req ports.ApplicationVersionRequest) (ports.ApplicationVersionResponse, error) {
+	var out ports.ApplicationVersionResponse
+	return out, c.get(ctx, "/v1/applications/"+req.Application+"/version", &out)
+}
+
+func (c Client) CheckApplicationUpdate(ctx context.Context, req ports.ApplicationVersionRequest) (ports.ApplicationUpdateCheckResponse, error) {
+	var out ports.ApplicationUpdateCheckResponse
+	return out, c.get(ctx, "/v1/applications/"+req.Application+"/check-update", &out)
+}
+
+func (c Client) UpdateApplication(ctx context.Context, req ports.UpdateApplicationRequest) (ports.ApplicationDeploymentResponse, error) {
+	var out ports.ApplicationDeploymentResponse
+	return out, c.post(ctx, "/v1/applications/update", req, &out)
+}
+
+func (c Client) RollbackApplication(ctx context.Context, req ports.RollbackApplicationRequest) (ports.ApplicationDeploymentResponse, error) {
+	var out ports.ApplicationDeploymentResponse
+	return out, c.post(ctx, "/v1/applications/rollback", req, &out)
+}
+
 func (c Client) get(ctx context.Context, path string, out any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://unix"+path, nil)
 	if err != nil {
