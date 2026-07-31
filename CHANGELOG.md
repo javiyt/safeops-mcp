@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 0.8.0
+
+- Added deployable `applications` configuration for controlled service and container updates while preserving existing cache cleanup configuration.
+- Added MCP tools: `application_version`, `check_application_update`, `request_application_update`, and `request_application_rollback`.
+- Added safe update execution for configured Git service applications and configured container image applications, with fixed branches/channels, separated process arguments, optional predefined post-update commands, health checks, and automatic rollback attempts on update failure.
+- Added SQLite `deployment_history` persistence with version, digest or commit, previous/next version, status, triggering user, and per-application pruning through `rollback.versions_to_keep`.
+- Added security restrictions for per-application Git repository whitelists, Podman registry whitelist validation, digest-required container deployments, configured commands only, and rollback only to recorded versions.
+- Added `safeopsctl app version|check-update|update|rollback|history`.
+- Updated README, architecture, security model, operations, OpenClaw configuration, and OpenClaw agent prompt documentation for controlled deployments.
+
 ## 0.7.0
 
 - Added controlled maintenance MCP tools: `request_group_restart`, `rotate_configured_logs`, `cleanup_application_cache`, `remove_expired_safeops_records`, `reset_resource_failure_state`, and `request_host_reboot`.

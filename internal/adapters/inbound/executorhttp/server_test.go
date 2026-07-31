@@ -217,3 +217,15 @@ func (b fakeBackend) RebootHost(context.Context, ports.RebootHostRequest) (ports
 func (b fakeBackend) CancelHostReboot(context.Context, ports.RebootHostRequest) (ports.RebootHostResponse, error) {
 	return ports.RebootHostResponse{Status: "executed", Action: "cancel_reboot_host"}, b.err
 }
+func (b fakeBackend) ApplicationVersion(context.Context, ports.ApplicationVersionRequest) (ports.ApplicationVersionResponse, error) {
+	return ports.ApplicationVersionResponse{Application: "app-service", CurrentVersion: "1.0.0"}, b.err
+}
+func (b fakeBackend) CheckApplicationUpdate(context.Context, ports.ApplicationVersionRequest) (ports.ApplicationUpdateCheckResponse, error) {
+	return ports.ApplicationUpdateCheckResponse{Application: "app-service", CurrentVersion: "1.0.0", AvailableVersion: "1.0.1", UpdateAvailable: true}, b.err
+}
+func (b fakeBackend) UpdateApplication(context.Context, ports.UpdateApplicationRequest) (ports.ApplicationDeploymentResponse, error) {
+	return ports.ApplicationDeploymentResponse{Status: "success", Action: "update_application", Application: "app-service"}, b.err
+}
+func (b fakeBackend) RollbackApplication(context.Context, ports.RollbackApplicationRequest) (ports.ApplicationDeploymentResponse, error) {
+	return ports.ApplicationDeploymentResponse{Status: "success", Action: "rollback_application", Application: "app-service"}, b.err
+}

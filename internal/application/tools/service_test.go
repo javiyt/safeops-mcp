@@ -9,6 +9,7 @@ import (
 	"github.com/javiyt/safeops-mcp/internal/config"
 	"github.com/javiyt/safeops-mcp/internal/domain/approval"
 	"github.com/javiyt/safeops-mcp/internal/domain/audit"
+	"github.com/javiyt/safeops-mcp/internal/domain/deployment"
 	"github.com/javiyt/safeops-mcp/internal/domain/policy"
 	"github.com/javiyt/safeops-mcp/internal/domain/service"
 	"github.com/javiyt/safeops-mcp/internal/ports"
@@ -333,6 +334,63 @@ func TestApplicationErrorBranches(t *testing.T) {
 	}
 }
 
+func TestApplicationUpdateApprovalRecordsDeploymentHistory(t *testing.T) {
+	repo := newApprovalRepo()
+	svc := testService(repo, fakeAudit{}, fakeExecutor{})
+	version, err := svc.ApplicationVersion(context.Background(), "operator", ApplicationInput{Application: "app-service"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if version.CurrentVersion != "1.0.0" {
+		t.Fatalf("version = %+v", version)
+	}
+	check, err := svc.CheckApplicationUpdate(context.Background(), "operator", ApplicationInput{Application: "app-service"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !check.UpdateAvailable {
+		t.Fatalf("check = %+v", check)
+	}
+	out, err := svc.RequestApplicationUpdate(context.Background(), "operator", RequestApplicationUpdateInput{Application: "app-service", Reason: "controlled update"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := svc.ConfirmAction(context.Background(), "operator", ConfirmInput{ApprovalID: out.ApprovalID, ConfirmationCode: out.ConfirmationCode})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "success" || result.ResourceKind != "application" {
+		t.Fatalf("result = %+v", result)
+	}
+	history, err := svc.ApplicationHistory(context.Background(), "operator", ApplicationInput{Application: "app-service"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history["history"]) != 1 || history["history"][0].Version != "1.0.1" {
+		t.Fatalf("history = %+v", history)
+	}
+}
+
+func TestApplicationRollbackUsesRecordedVersionOnly(t *testing.T) {
+	repo := newApprovalRepo()
+	repo.deployments = []deployment.HistoryRecord{{ID: "dep_0", ApplicationAlias: "app-service", Version: "1.0.0", CommitHash: "commit-prev", Status: "success"}}
+	svc := testService(repo, fakeAudit{}, fakeExecutor{})
+	if _, err := svc.RequestApplicationRollback(context.Background(), "operator", RequestApplicationRollbackInput{Application: "app-service", Reason: "rollback", Version: "9.9.9"}); err == nil {
+		t.Fatal("RequestApplicationRollback() error = nil, want unknown version error")
+	}
+	out, err := svc.RequestApplicationRollback(context.Background(), "operator", RequestApplicationRollbackInput{Application: "app-service", Reason: "rollback", Version: "1.0.0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := svc.ConfirmAction(context.Background(), "operator", ConfirmInput{ApprovalID: out.ApprovalID, ConfirmationCode: out.ConfirmationCode})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "success" {
+		t.Fatalf("result = %+v", result)
+	}
+}
+
 func TestRequestRestartRequiresAuditPersistence(t *testing.T) {
 	svc := testService(newApprovalRepo(), failingAudit{}, fakeExecutor{})
 	if _, err := svc.RequestServiceRestart(context.Background(), "operator", RequestRestartInput{Service: "service-alpha", Reason: "stopped"}); err == nil {
@@ -487,15 +545,17 @@ func TestActionStatusRejectsWrongUser(t *testing.T) {
 }
 
 func testService(approvals ports.ApprovalRepository, audit ports.AuditRepository, executor ports.ExecutorClient) Service {
+	deployments, _ := approvals.(ports.DeploymentRepository)
 	return Service{
-		Config:    ConfigForTest(),
-		Executor:  executor,
-		Approvals: approvals,
-		Audit:     audit,
-		Clock:     fakeClock{now: time.Date(2026, 7, 24, 10, 0, 0, 0, time.UTC)},
-		IDs:       fakeIDs{},
-		Codes:     fakeCodes{},
-		Policy:    policy.Engine{},
+		Config:      ConfigForTest(),
+		Executor:    executor,
+		Approvals:   approvals,
+		Deployments: deployments,
+		Audit:       audit,
+		Clock:       fakeClock{now: time.Date(2026, 7, 24, 10, 0, 0, 0, time.UTC)},
+		IDs:         fakeIDs{},
+		Codes:       fakeCodes{},
+		Policy:      policy.Engine{},
 	}
 }
 
@@ -509,6 +569,16 @@ func ConfigForTest() config.Config {
 			"service-alpha": {
 				Unit:        "app-alpha.service",
 				Permissions: config.PermissionsConfig{Status: "allow", Logs: "allow", Restart: "confirm"},
+			},
+		},
+		Applications: map[string]config.ApplicationConfig{
+			"app-service": {
+				Kind:        "service",
+				ServiceName: "service-alpha",
+				Management:  "systemd",
+				Repository:  config.ApplicationRepositoryConfig{Type: "git", URL: "https://example.invalid/app-service", Branch: "main", Path: "/opt/app-service"},
+				Permissions: config.ApplicationPermissionsConfig{Check: "allow", Update: "confirm", Rollback: "confirm"},
+				Rollback:    config.ApplicationRollbackConfig{Enabled: true, VersionsToKeep: 5},
 			},
 		},
 	}
@@ -575,8 +645,9 @@ func (a *failAfterAudit) Append(context.Context, audit.Event) error {
 func (a *failAfterAudit) ListAudit(context.Context, int) ([]audit.Event, error) { return nil, nil }
 
 type approvalRepo struct {
-	items  map[string]approval.Approval
-	locked bool
+	items       map[string]approval.Approval
+	deployments []deployment.HistoryRecord
+	locked      bool
 }
 
 func newApprovalRepo() *approvalRepo {
@@ -641,6 +712,50 @@ func (r *approvalRepo) AcquireOperationLock(context.Context, string, string, str
 }
 func (r *approvalRepo) ReleaseOperationLock(context.Context, string, string, string) error {
 	r.locked = false
+	return nil
+}
+func (r *approvalRepo) AppendDeployment(_ context.Context, record deployment.HistoryRecord) error {
+	r.deployments = append(r.deployments, record)
+	return nil
+}
+func (r *approvalRepo) ListDeployments(_ context.Context, applicationAlias string, limit int) ([]deployment.HistoryRecord, error) {
+	var out []deployment.HistoryRecord
+	for _, record := range r.deployments {
+		if record.ApplicationAlias == applicationAlias {
+			out = append(out, record)
+		}
+	}
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+func (r *approvalRepo) LatestSuccessfulDeployment(_ context.Context, applicationAlias string) (deployment.HistoryRecord, error) {
+	for i := len(r.deployments) - 1; i >= 0; i-- {
+		record := r.deployments[i]
+		if record.ApplicationAlias == applicationAlias && record.Status == "success" {
+			return record, nil
+		}
+	}
+	return deployment.HistoryRecord{}, errors.New("not found")
+}
+func (r *approvalRepo) PruneDeployments(_ context.Context, applicationAlias string, keep int) error {
+	if keep <= 0 {
+		return nil
+	}
+	var kept []deployment.HistoryRecord
+	count := 0
+	for i := len(r.deployments) - 1; i >= 0; i-- {
+		record := r.deployments[i]
+		if record.ApplicationAlias == applicationAlias {
+			count++
+			if count > keep {
+				continue
+			}
+		}
+		kept = append([]deployment.HistoryRecord{record}, kept...)
+	}
+	r.deployments = kept
 	return nil
 }
 
@@ -729,6 +844,18 @@ func (fakeExecutor) RebootHost(context.Context, ports.RebootHostRequest) (ports.
 }
 func (fakeExecutor) CancelHostReboot(context.Context, ports.RebootHostRequest) (ports.RebootHostResponse, error) {
 	return ports.RebootHostResponse{Status: "executed", Action: "cancel_reboot_host"}, nil
+}
+func (fakeExecutor) ApplicationVersion(context.Context, ports.ApplicationVersionRequest) (ports.ApplicationVersionResponse, error) {
+	return ports.ApplicationVersionResponse{Application: "app-service", Kind: "service", CurrentVersion: "1.0.0", AvailableVersion: "1.0.1", AvailableCommit: "commit-next"}, nil
+}
+func (fakeExecutor) CheckApplicationUpdate(context.Context, ports.ApplicationVersionRequest) (ports.ApplicationUpdateCheckResponse, error) {
+	return ports.ApplicationUpdateCheckResponse{Application: "app-service", CurrentVersion: "1.0.0", AvailableVersion: "1.0.1", AvailableCommit: "commit-next", UpdateAvailable: true}, nil
+}
+func (fakeExecutor) UpdateApplication(context.Context, ports.UpdateApplicationRequest) (ports.ApplicationDeploymentResponse, error) {
+	return ports.ApplicationDeploymentResponse{Status: "success", Action: "update_application", Application: "app-service", PreviousVersion: "1.0.0", CurrentVersion: "1.0.1", TargetVersion: "1.0.1", CommitHash: "commit-next"}, nil
+}
+func (fakeExecutor) RollbackApplication(context.Context, ports.RollbackApplicationRequest) (ports.ApplicationDeploymentResponse, error) {
+	return ports.ApplicationDeploymentResponse{Status: "success", Action: "rollback_application", Application: "app-service", PreviousVersion: "1.0.1", CurrentVersion: "1.0.0", TargetVersion: "1.0.0", CommitHash: "commit-prev"}, nil
 }
 
 type recordingExecutor struct {

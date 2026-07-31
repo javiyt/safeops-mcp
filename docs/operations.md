@@ -345,3 +345,72 @@ safeopsctl reset-failed service-alpha --dry-run --config /etc/safeops/config.yam
 ```
 
 Host reboot is disabled by default. If enabled, configure sudoers outside SafeOps so the executor user can run only the restricted shutdown command without a password. Do not grant broad sudo.
+
+## Controlled Application Updates
+
+Run migrations before using deployments:
+
+```sh
+safeopsctl migrate --config /etc/safeops/config.yaml
+```
+
+Configure each deployable application under `applications`. The application alias must point at an existing service or container alias:
+
+```yaml
+podman:
+  registry_whitelist: [ghcr.io]
+applications:
+  app-service:
+    kind: service
+    service_name: service-alpha
+    management: systemd
+    repository:
+      type: git
+      url: https://example.invalid/org/app-service
+      branch: main
+      path: /opt/app-service
+      whitelist: [https://example.invalid/org/app-service]
+    version:
+      file: /opt/app-service/VERSION
+    rollback:
+      enabled: true
+      versions_to_keep: 5
+    permissions:
+      check: allow
+      update: confirm
+      rollback: confirm
+  example-container:
+    kind: container
+    container_name: container-alpha
+    management: podman
+    repository:
+      type: container-registry
+    image:
+      registry: ghcr.io
+      repository: example/app-service
+      channel: stable
+      digest_required: true
+    rollback:
+      enabled: true
+      versions_to_keep: 5
+    permissions:
+      check: allow
+      update: confirm
+      rollback: confirm
+```
+
+Check and operate from the CLI:
+
+```sh
+safeopsctl app version app-service --config /etc/safeops/config.yaml
+safeopsctl app check-update app-service --config /etc/safeops/config.yaml
+safeopsctl app update app-service --dry-run --config /etc/safeops/config.yaml
+safeopsctl app rollback app-service --version 1.0.0 --dry-run --config /etc/safeops/config.yaml
+safeopsctl app history app-service --config /etc/safeops/config.yaml
+```
+
+Telegram and OpenClaw should use the MCP tools instead of direct CLI execution: `application_version`, `check_application_update`, `request_application_update`, `request_application_rollback`, and `confirm_action`.
+
+History rows use status `success`, `failed`, or the executor result status. `previous_version` and `next_version` describe the transition, while `image_digest` or `commit_hash` identify the deployed artifact. SafeOps prunes history per application according to `rollback.versions_to_keep`.
+
+Install `git` for service applications. Container applications use the configured Podman binary; `skopeo` is not required by this implementation.

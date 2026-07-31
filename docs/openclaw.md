@@ -94,7 +94,11 @@ The important MCP server block is:
             "list_containers",
             "container_status",
             "container_logs",
-            "request_container_restart"
+            "request_container_restart",
+            "application_version",
+            "check_application_update",
+            "request_application_update",
+            "request_application_rollback"
           ]
         }
       }
@@ -138,6 +142,10 @@ The expected tool list is:
 - `container_status` only when Podman is enabled
 - `container_logs` only when Podman is enabled
 - `request_container_restart` only when Podman is enabled
+- `application_version`
+- `check_application_update`
+- `request_application_update`
+- `request_application_rollback`
 
 No `exec`, `shell`, `process`, filesystem, SSH, Docker, or direct Podman tool should appear.
 

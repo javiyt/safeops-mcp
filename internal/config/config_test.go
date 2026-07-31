@@ -215,6 +215,46 @@ func TestValidatePodmanConfiguration(t *testing.T) {
 	}
 }
 
+func TestValidateApplicationDeploymentConfiguration(t *testing.T) {
+	cfg := validConfig()
+	enablePodmanForTest(&cfg)
+	cfg.Podman.RegistryWhitelist = []string{"ghcr.io"}
+	cfg.Applications = map[string]ApplicationConfig{
+		"app-service": {
+			Kind:          "container",
+			ContainerName: "container-alpha",
+			Management:    "podman",
+			Repository:    ApplicationRepositoryConfig{Type: "container-registry"},
+			Image:         ApplicationImageConfig{Registry: "ghcr.io", Repository: "example/app-service", Channel: "stable", DigestRequired: true},
+			Permissions:   ApplicationPermissionsConfig{Check: "allow", Update: "confirm", Rollback: "confirm"},
+			Rollback:      ApplicationRollbackConfig{Enabled: true, VersionsToKeep: 5},
+		},
+	}
+	if err := Validate(cfg); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
+func TestValidateRejectsUnsafeApplicationDeploymentConfiguration(t *testing.T) {
+	cfg := validConfig()
+	enablePodmanForTest(&cfg)
+	cfg.Podman.RegistryWhitelist = []string{"ghcr.io"}
+	cfg.Applications = map[string]ApplicationConfig{
+		"app-service": {
+			Kind:          "container",
+			ContainerName: "container-alpha",
+			Management:    "podman",
+			Repository:    ApplicationRepositoryConfig{Type: "container-registry"},
+			Image:         ApplicationImageConfig{Registry: "registry.example", Repository: "example/app-service", Channel: "stable", DigestRequired: true},
+			Permissions:   ApplicationPermissionsConfig{Check: "allow", Update: "confirm", Rollback: "confirm"},
+			Rollback:      ApplicationRollbackConfig{Enabled: true, VersionsToKeep: 5},
+		},
+	}
+	if err := Validate(cfg); err == nil {
+		t.Fatal("Validate() error = nil, want whitelist error")
+	}
+}
+
 func TestValidateRejectsInvalidPodmanConfiguration(t *testing.T) {
 	cases := []struct {
 		name   string

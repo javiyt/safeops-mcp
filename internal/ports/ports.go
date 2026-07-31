@@ -7,6 +7,7 @@ import (
 	"github.com/javiyt/safeops-mcp/internal/domain/alert"
 	"github.com/javiyt/safeops-mcp/internal/domain/approval"
 	"github.com/javiyt/safeops-mcp/internal/domain/audit"
+	"github.com/javiyt/safeops-mcp/internal/domain/deployment"
 	"github.com/javiyt/safeops-mcp/internal/domain/service"
 )
 
@@ -53,6 +54,13 @@ type AlertRepository interface {
 	PruneResolvedAlerts(ctx context.Context, before time.Time) (int64, error)
 }
 
+type DeploymentRepository interface {
+	AppendDeployment(ctx context.Context, record deployment.HistoryRecord) error
+	ListDeployments(ctx context.Context, applicationAlias string, limit int) ([]deployment.HistoryRecord, error)
+	LatestSuccessfulDeployment(ctx context.Context, applicationAlias string) (deployment.HistoryRecord, error)
+	PruneDeployments(ctx context.Context, applicationAlias string, keep int) error
+}
+
 type ExecutorClient interface {
 	SystemStatus(ctx context.Context) (SystemStatus, error)
 	DiskStatus(ctx context.Context, alias string) (DiskStatus, error)
@@ -77,6 +85,10 @@ type ExecutorClient interface {
 	ResetFailureState(ctx context.Context, req ResetFailureStateRequest) (ResetFailureStateResponse, error)
 	RebootHost(ctx context.Context, req RebootHostRequest) (RebootHostResponse, error)
 	CancelHostReboot(ctx context.Context, req RebootHostRequest) (RebootHostResponse, error)
+	ApplicationVersion(ctx context.Context, req ApplicationVersionRequest) (ApplicationVersionResponse, error)
+	CheckApplicationUpdate(ctx context.Context, req ApplicationVersionRequest) (ApplicationUpdateCheckResponse, error)
+	UpdateApplication(ctx context.Context, req UpdateApplicationRequest) (ApplicationDeploymentResponse, error)
+	RollbackApplication(ctx context.Context, req RollbackApplicationRequest) (ApplicationDeploymentResponse, error)
 }
 
 type ExecutorServer interface {
@@ -103,6 +115,10 @@ type ExecutorServer interface {
 	ResetFailureState(ctx context.Context, req ResetFailureStateRequest) (ResetFailureStateResponse, error)
 	RebootHost(ctx context.Context, req RebootHostRequest) (RebootHostResponse, error)
 	CancelHostReboot(ctx context.Context, req RebootHostRequest) (RebootHostResponse, error)
+	ApplicationVersion(ctx context.Context, req ApplicationVersionRequest) (ApplicationVersionResponse, error)
+	CheckApplicationUpdate(ctx context.Context, req ApplicationVersionRequest) (ApplicationUpdateCheckResponse, error)
+	UpdateApplication(ctx context.Context, req UpdateApplicationRequest) (ApplicationDeploymentResponse, error)
+	RollbackApplication(ctx context.Context, req RollbackApplicationRequest) (ApplicationDeploymentResponse, error)
 }
 
 type SystemStatus struct {
@@ -463,4 +479,69 @@ type RebootHostResponse struct {
 	ExpectedEffect string         `json:"expected_effect"`
 	CheckResults   map[string]any `json:"check_results"`
 	WouldRun       string         `json:"would_run,omitempty"`
+}
+
+type ApplicationVersionRequest struct {
+	Application string `json:"application"`
+}
+
+type ApplicationVersionResponse struct {
+	Application      string `json:"application"`
+	Kind             string `json:"kind"`
+	CurrentVersion   string `json:"current_version"`
+	CurrentDigest    string `json:"current_digest,omitempty"`
+	CurrentCommit    string `json:"current_commit,omitempty"`
+	AvailableVersion string `json:"available_version,omitempty"`
+	AvailableDigest  string `json:"available_digest,omitempty"`
+	AvailableCommit  string `json:"available_commit,omitempty"`
+	Channel          string `json:"channel,omitempty"`
+	Source           string `json:"source"`
+}
+
+type ApplicationUpdateCheckResponse struct {
+	Application      string `json:"application"`
+	UpdateAvailable  bool   `json:"update_available"`
+	CurrentVersion   string `json:"current_version"`
+	AvailableVersion string `json:"available_version"`
+	CurrentDigest    string `json:"current_digest,omitempty"`
+	AvailableDigest  string `json:"available_digest,omitempty"`
+	CurrentCommit    string `json:"current_commit,omitempty"`
+	AvailableCommit  string `json:"available_commit,omitempty"`
+	Changelog        string `json:"changelog,omitempty"`
+}
+
+type UpdateApplicationRequest struct {
+	Application   string `json:"application"`
+	OperationID   string `json:"operation_id"`
+	TargetVersion string `json:"target_version,omitempty"`
+	TargetDigest  string `json:"target_digest,omitempty"`
+	TargetCommit  string `json:"target_commit,omitempty"`
+	TriggeredBy   string `json:"triggered_by"`
+	DryRun        bool   `json:"dry_run"`
+}
+
+type RollbackApplicationRequest struct {
+	Application   string `json:"application"`
+	OperationID   string `json:"operation_id"`
+	TargetVersion string `json:"target_version"`
+	TargetDigest  string `json:"target_digest,omitempty"`
+	TargetCommit  string `json:"target_commit,omitempty"`
+	TriggeredBy   string `json:"triggered_by"`
+	DryRun        bool   `json:"dry_run"`
+}
+
+type ApplicationDeploymentResponse struct {
+	Status            string                 `json:"status"`
+	Action            string                 `json:"action"`
+	Application       string                 `json:"application"`
+	PreviousVersion   string                 `json:"previous_version"`
+	CurrentVersion    string                 `json:"current_version"`
+	TargetVersion     string                 `json:"target_version"`
+	ImageDigest       string                 `json:"image_digest,omitempty"`
+	CommitHash        string                 `json:"commit_hash,omitempty"`
+	Healthcheck       *HealthcheckResult     `json:"healthcheck,omitempty"`
+	Health            *ContainerHealthResult `json:"health,omitempty"`
+	RollbackAttempted bool                   `json:"rollback_attempted"`
+	RollbackStatus    string                 `json:"rollback_status,omitempty"`
+	WouldRun          []string               `json:"would_run,omitempty"`
 }

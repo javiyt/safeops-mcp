@@ -402,6 +402,18 @@ func (fakeExecutor) RebootHost(context.Context, ports.RebootHostRequest) (ports.
 func (fakeExecutor) CancelHostReboot(context.Context, ports.RebootHostRequest) (ports.RebootHostResponse, error) {
 	return ports.RebootHostResponse{Status: "executed", Action: "cancel_reboot_host"}, nil
 }
+func (fakeExecutor) ApplicationVersion(context.Context, ports.ApplicationVersionRequest) (ports.ApplicationVersionResponse, error) {
+	return ports.ApplicationVersionResponse{Application: "app-service", CurrentVersion: "1.0.0"}, nil
+}
+func (fakeExecutor) CheckApplicationUpdate(context.Context, ports.ApplicationVersionRequest) (ports.ApplicationUpdateCheckResponse, error) {
+	return ports.ApplicationUpdateCheckResponse{Application: "app-service", CurrentVersion: "1.0.0", AvailableVersion: "1.0.1", UpdateAvailable: true}, nil
+}
+func (fakeExecutor) UpdateApplication(context.Context, ports.UpdateApplicationRequest) (ports.ApplicationDeploymentResponse, error) {
+	return ports.ApplicationDeploymentResponse{Status: "success", Action: "update_application", Application: "app-service"}, nil
+}
+func (fakeExecutor) RollbackApplication(context.Context, ports.RollbackApplicationRequest) (ports.ApplicationDeploymentResponse, error) {
+	return ports.ApplicationDeploymentResponse{Status: "success", Action: "rollback_application", Application: "app-service"}, nil
+}
 
 type fakeClock struct {
 	now time.Time

@@ -69,6 +69,10 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	mux.HandleFunc("POST /v1/maintenance/reset-failure", s.handleResetFailureState)
 	mux.HandleFunc("POST /v1/maintenance/reboot", s.handleRebootHost)
 	mux.HandleFunc("POST /v1/maintenance/reboot/cancel", s.handleCancelHostReboot)
+	mux.HandleFunc("GET /v1/applications/{alias}/version", s.handleApplicationVersion)
+	mux.HandleFunc("GET /v1/applications/{alias}/check-update", s.handleCheckApplicationUpdate)
+	mux.HandleFunc("POST /v1/applications/update", s.handleUpdateApplication)
+	mux.HandleFunc("POST /v1/applications/rollback", s.handleRollbackApplication)
 	s.server = &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	go func() {
 		<-ctx.Done()
@@ -245,6 +249,36 @@ func (s *Server) handleCancelHostReboot(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	out, err := s.Backend.CancelHostReboot(r.Context(), req)
+	writeJSON(w, out, err)
+}
+
+func (s *Server) handleApplicationVersion(w http.ResponseWriter, r *http.Request) {
+	out, err := s.Backend.ApplicationVersion(r.Context(), ports.ApplicationVersionRequest{Application: r.PathValue("alias")})
+	writeJSON(w, out, err)
+}
+
+func (s *Server) handleCheckApplicationUpdate(w http.ResponseWriter, r *http.Request) {
+	out, err := s.Backend.CheckApplicationUpdate(r.Context(), ports.ApplicationVersionRequest{Application: r.PathValue("alias")})
+	writeJSON(w, out, err)
+}
+
+func (s *Server) handleUpdateApplication(w http.ResponseWriter, r *http.Request) {
+	var req ports.UpdateApplicationRequest
+	if err := decodeStrict(w, r, &req); err != nil {
+		writeJSON(w, nil, err)
+		return
+	}
+	out, err := s.Backend.UpdateApplication(r.Context(), req)
+	writeJSON(w, out, err)
+}
+
+func (s *Server) handleRollbackApplication(w http.ResponseWriter, r *http.Request) {
+	var req ports.RollbackApplicationRequest
+	if err := decodeStrict(w, r, &req); err != nil {
+		writeJSON(w, nil, err)
+		return
+	}
+	out, err := s.Backend.RollbackApplication(r.Context(), req)
 	writeJSON(w, out, err)
 }
 

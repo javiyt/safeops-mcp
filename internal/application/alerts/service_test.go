@@ -247,6 +247,18 @@ func (f *fakeExecutor) RebootHost(context.Context, ports.RebootHostRequest) (por
 func (f *fakeExecutor) CancelHostReboot(context.Context, ports.RebootHostRequest) (ports.RebootHostResponse, error) {
 	return ports.RebootHostResponse{}, nil
 }
+func (f *fakeExecutor) ApplicationVersion(context.Context, ports.ApplicationVersionRequest) (ports.ApplicationVersionResponse, error) {
+	return ports.ApplicationVersionResponse{}, nil
+}
+func (f *fakeExecutor) CheckApplicationUpdate(context.Context, ports.ApplicationVersionRequest) (ports.ApplicationUpdateCheckResponse, error) {
+	return ports.ApplicationUpdateCheckResponse{}, nil
+}
+func (f *fakeExecutor) UpdateApplication(context.Context, ports.UpdateApplicationRequest) (ports.ApplicationDeploymentResponse, error) {
+	return ports.ApplicationDeploymentResponse{}, nil
+}
+func (f *fakeExecutor) RollbackApplication(context.Context, ports.RollbackApplicationRequest) (ports.ApplicationDeploymentResponse, error) {
+	return ports.ApplicationDeploymentResponse{}, nil
+}
 
 var _ ports.ExecutorClient = (*fakeExecutor)(nil)
 var _ ports.AuditRepository = (*sqlitestore.Store)(nil)

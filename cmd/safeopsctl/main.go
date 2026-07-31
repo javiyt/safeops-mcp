@@ -26,6 +26,7 @@ import (
 	"github.com/javiyt/safeops-mcp/internal/bootstrap"
 	"github.com/javiyt/safeops-mcp/internal/config"
 	"github.com/javiyt/safeops-mcp/internal/domain/alert"
+	"github.com/javiyt/safeops-mcp/internal/domain/deployment"
 	"github.com/javiyt/safeops-mcp/internal/ports"
 	"github.com/javiyt/safeops-mcp/internal/redaction"
 )
@@ -46,7 +47,7 @@ func main() {
 
 func run(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: safeopsctl <validate-config|migrate|approvals|audit|alerts|podman|containers|diagnostics|groups|logs|cache|records|reset-failed|reboot> [args]")
+		return fmt.Errorf("usage: safeopsctl <validate-config|migrate|approvals|audit|alerts|podman|containers|diagnostics|app|groups|logs|cache|records|reset-failed|reboot> [args]")
 	}
 	switch args[0] {
 	case "validate-config":
@@ -82,11 +83,119 @@ func run(ctx context.Context, args []string) error {
 		return containers(ctx, args[1:])
 	case "diagnostics":
 		return diagnostics(ctx, args[1:])
+	case "app":
+		return appCommand(ctx, args[1:])
 	case "groups", "logs", "cache", "records", "reset-failed", "reboot":
 		return maintenance(ctx, args)
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
+}
+
+func appCommand(ctx context.Context, args []string) error {
+	if len(args) < 2 {
+		return fmt.Errorf("usage: safeopsctl app <version|check-update|update|rollback|history> <alias> [--config /etc/safeops/config.yaml]")
+	}
+	sub, alias := args[0], args[1]
+	fs := flag.NewFlagSet("app "+sub, flag.ContinueOnError)
+	cfgPath := fs.String("config", "/etc/safeops/config.yaml", "Path to the SafeOps configuration file.")
+	dryRun := fs.Bool("dry-run", false, "Simulate the operation.")
+	version := fs.String("version", "", "Target version from deployment history or configured source.")
+	if err := fs.Parse(args[2:]); err != nil {
+		return err
+	}
+	cfg, err := config.Load(*cfgPath)
+	if err != nil {
+		return err
+	}
+	switch sub {
+	case "version":
+		out, err := executorClient(cfg).ApplicationVersion(ctx, ports.ApplicationVersionRequest{Application: alias})
+		return printJSON(out, err)
+	case "check-update":
+		out, err := executorClient(cfg).CheckApplicationUpdate(ctx, ports.ApplicationVersionRequest{Application: alias})
+		return printJSON(out, err)
+	case "update":
+		out, err := executorClient(cfg).UpdateApplication(ctx, ports.UpdateApplicationRequest{Application: alias, OperationID: "safeopsctl", TargetVersion: *version, TriggeredBy: cfg.Identity.AdministratorID, DryRun: *dryRun})
+		if err == nil && !*dryRun {
+			err = appendCLIHistory(ctx, cfg, alias, "update", out)
+		}
+		return printJSON(out, err)
+	case "rollback":
+		target := *version
+		if target == "" {
+			store, err := sqlitestore.Open(cfg.Database.Path)
+			if err != nil {
+				return err
+			}
+			defer func() { _ = store.Close() }()
+			record, err := store.LatestSuccessfulDeployment(ctx, alias)
+			if err != nil {
+				return err
+			}
+			target = record.Version
+		}
+		out, err := executorClient(cfg).RollbackApplication(ctx, ports.RollbackApplicationRequest{Application: alias, OperationID: "safeopsctl", TargetVersion: target, TriggeredBy: cfg.Identity.AdministratorID, DryRun: *dryRun})
+		if err == nil && !*dryRun {
+			err = appendCLIHistory(ctx, cfg, alias, "rollback", out)
+		}
+		return printJSON(out, err)
+	case "history":
+		store, err := sqlitestore.Open(cfg.Database.Path)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = store.Close() }()
+		if err := store.Migrate(ctx); err != nil {
+			return err
+		}
+		items, err := store.ListDeployments(ctx, alias, 20)
+		return printJSON(map[string]any{"history": items}, err)
+	default:
+		return fmt.Errorf("unknown app command %q", sub)
+	}
+}
+
+func appendCLIHistory(ctx context.Context, cfg config.Config, alias, deploymentType string, out ports.ApplicationDeploymentResponse) error {
+	store, err := sqlitestore.Open(cfg.Database.Path)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = store.Close() }()
+	if err := store.Migrate(ctx); err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	record := deployment.HistoryRecord{
+		ID:               fmt.Sprintf("dep_safeopsctl_%d", now.UnixNano()),
+		ApplicationAlias: alias,
+		Version:          firstNonEmptyCLI(out.CurrentVersion, out.TargetVersion),
+		DeployedAt:       now,
+		DeploymentType:   deploymentType,
+		TriggeredBy:      cfg.Identity.AdministratorID,
+		ImageDigest:      out.ImageDigest,
+		CommitHash:       out.CommitHash,
+		Status:           out.Status,
+		PreviousVersion:  out.PreviousVersion,
+		NextVersion:      out.TargetVersion,
+		CreatedAt:        now,
+	}
+	if err := store.AppendDeployment(ctx, record); err != nil {
+		return err
+	}
+	if app := cfg.Applications[alias]; app.Rollback.VersionsToKeep > 0 {
+		return store.PruneDeployments(ctx, alias, app.Rollback.VersionsToKeep)
+	}
+	return nil
+}
+
+func firstNonEmptyCLI(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func maintenance(ctx context.Context, args []string) error {

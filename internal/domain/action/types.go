@@ -11,14 +11,16 @@ const (
 type Type string
 
 const (
-	TypeRestartService   Type = "restart_service"
-	TypeRestartContainer Type = "restart_container"
-	TypeRestartGroup     Type = "restart_group"
-	TypeRotateLogs       Type = "rotate_logs"
-	TypeCleanupCache     Type = "cleanup_cache"
-	TypeRemoveRecords    Type = "remove_records"
-	TypeResetFailure     Type = "reset_failure"
-	TypeRebootHost       Type = "reboot_host"
+	TypeRestartService      Type = "restart_service"
+	TypeRestartContainer    Type = "restart_container"
+	TypeRestartGroup        Type = "restart_group"
+	TypeRotateLogs          Type = "rotate_logs"
+	TypeCleanupCache        Type = "cleanup_cache"
+	TypeRemoveRecords       Type = "remove_records"
+	TypeResetFailure        Type = "reset_failure"
+	TypeRebootHost          Type = "reboot_host"
+	TypeUpdateApplication   Type = "update_application"
+	TypeRollbackApplication Type = "rollback_application"
 )
 
 type ResourceKind string
@@ -32,4 +34,5 @@ const (
 	ResourceRecord       ResourceKind = "record"
 	ResourceFailureState ResourceKind = "failure_state"
 	ResourceHost         ResourceKind = "host"
+	ResourceApplication  ResourceKind = "application"
 )
