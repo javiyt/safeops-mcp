@@ -21,6 +21,7 @@ const (
 	TypeRebootHost          Type = "reboot_host"
 	TypeUpdateApplication   Type = "update_application"
 	TypeRollbackApplication Type = "rollback_application"
+	TypeCreateBackup        Type = "create_backup"
 )
 
 type ResourceKind string
@@ -35,4 +36,5 @@ const (
 	ResourceFailureState ResourceKind = "failure_state"
 	ResourceHost         ResourceKind = "host"
 	ResourceApplication  ResourceKind = "application"
+	ResourceBackup       ResourceKind = "backup"
 )

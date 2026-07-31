@@ -27,6 +27,7 @@ func NewToolService(ctx context.Context, cfg config.Config, logger *slog.Logger)
 		Approvals:   store,
 		Alerts:      store,
 		Deployments: store,
+		Backups:     store,
 		Audit:       store,
 		Clock:       SystemClock{},
 		IDs:         CryptoIDGenerator{},

@@ -57,6 +57,7 @@ SafeOps builds these binaries:
 - Alert state management with cooldowns, persistence thresholds, temporary silences, resolution notifications, SQLite persistence, MCP tools, and CLI commands.
 - Controlled maintenance operations for configured group restarts, configured log rotation, configured cache cleanup, SafeOps record retention, systemd failed-state reset, and opt-in host reboot.
 - Controlled application updates and rollbacks for configured services and containers, with approval, fixed Git branches or image channels, digest verification, health checks, automatic rollback on update failure, and SQLite deployment history.
+- Controlled full backups for configured resources with Restic or predefined command backends, approval, SQLite metadata, retention hooks, integrity checks, and restore-plan generation without executing restores.
 
 ## Configuration
 
@@ -271,6 +272,35 @@ applications:
       rollback: confirm
 ```
 
+Backups are opt-in under `backups`. SafeOps accepts only configured backup aliases and never accepts paths, repositories, passwords, commands, or backend arguments from the user:
+
+```yaml
+backups:
+  service-data-backup:
+    source_alias: service-alpha
+    description: Configured service data backup
+    backend: restic
+    repository: /mnt/backups/service-data
+    password_file: /etc/safeops/restic-password
+    source_path: /var/lib/service-alpha
+    retention:
+      keep_last: 7
+      keep_daily: 30
+    limits:
+      max_size_gb: 50
+      timeout: 30m
+    integrity_check: true
+  app-config-backup:
+    source_alias: service-alpha
+    description: Configured file backup
+    backend: command
+    operation: /usr/bin/tar -czf /tmp/app-config-backup.tar.gz /etc/app-service
+    destination: /mnt/backups/app-config
+    retention: 30
+```
+
+Available backup tools are `list_backups`, `backup_status`, `backup_history`, `request_backup`, and `request_restore_plan`. Restore execution is intentionally not implemented in this version.
+
 ## Running
 
 Run the executor on the host:
@@ -381,6 +411,14 @@ User: Update `app-service`.
 
 Agent: Updating `app-service` requires confirmation. SafeOps will use only the configured repository and branch, restart the service, run the configured health check, and roll back automatically if the health check fails. Reply with the confirmation code before it expires.
 
+User: When was the last valid backup of `service-data-backup`?
+
+Agent: The latest persisted backup for `service-data-backup` completed at 03:00 UTC. Integrity is verified and the recorded size is 2.4 GB.
+
+User: Create a backup now.
+
+Agent: Creating `service-data-backup` requires confirmation. SafeOps will run only the configured backend and commands. Reply with the confirmation code before it expires.
+
 ## Dry-Run
 
 When `policies.dry_run` is enabled, read tools behave normally. Confirmed mutable actions are simulated, audited as simulated, and return the operation that would have been performed.
@@ -391,7 +429,7 @@ Approvals and audit events are stored in SQLite. Confirmation codes are hashed b
 
 ## Roadmap
 
-Possible future work includes backups and recovery, metrics, Loki, multi-host operation, additional MCP clients, per-user policies, stronger authentication, request signing, and remote executors over mTLS.
+Possible future work includes restore execution, metrics, Loki, multi-host operation, additional MCP clients, per-user policies, stronger authentication, request signing, and remote executors over mTLS.
 
 SafeOps does not allow shell access, `podman exec`, arbitrary image pulls, container creation or removal, prune operations, Docker, Kubernetes, Podman socket access, arbitrary Quadlet file edits, or operations on resources that are not configured by alias.
 

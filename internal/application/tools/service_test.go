@@ -9,6 +9,7 @@ import (
 	"github.com/javiyt/safeops-mcp/internal/config"
 	"github.com/javiyt/safeops-mcp/internal/domain/approval"
 	"github.com/javiyt/safeops-mcp/internal/domain/audit"
+	"github.com/javiyt/safeops-mcp/internal/domain/backup"
 	"github.com/javiyt/safeops-mcp/internal/domain/deployment"
 	"github.com/javiyt/safeops-mcp/internal/domain/policy"
 	"github.com/javiyt/safeops-mcp/internal/domain/service"
@@ -544,13 +545,64 @@ func TestActionStatusRejectsWrongUser(t *testing.T) {
 	}
 }
 
+func TestBackupApprovalPersistsMetadataAndRestorePlan(t *testing.T) {
+	repo := newApprovalRepo()
+	auditRepo := &recordingAudit{}
+	svc := testService(repo, auditRepo, fakeExecutor{})
+	out, err := svc.RequestBackup(context.Background(), "operator", RequestBackupInput{BackupAlias: "backup-alpha", Reason: "before maintenance"})
+	if err != nil {
+		t.Fatalf("RequestBackup() error = %v", err)
+	}
+	if out.Status != "approval_required" || out.ConfirmationCode == "" {
+		t.Fatalf("approval output = %+v", out)
+	}
+	result, err := svc.ConfirmAction(context.Background(), "operator", ConfirmInput{ApprovalID: out.ApprovalID, ConfirmationCode: out.ConfirmationCode})
+	if err != nil {
+		t.Fatalf("ConfirmAction() error = %v", err)
+	}
+	if result.ResourceKind != "backup" || result.Resource != "backup-alpha" {
+		t.Fatalf("result = %+v", result)
+	}
+	if len(repo.backups) != 1 {
+		t.Fatalf("persisted backups = %d, want 1", len(repo.backups))
+	}
+	if repo.backups[0].Status != backup.StatusVerified || repo.backups[0].SnapshotID != "snapshot-alpha" {
+		t.Fatalf("backup record = %+v", repo.backups[0])
+	}
+	listed, err := svc.ListBackups(context.Background(), "operator", BackupAliasInput{BackupAlias: "backup-alpha"})
+	if err != nil {
+		t.Fatalf("ListBackups() error = %v", err)
+	}
+	if listed["total"].(int) != 1 {
+		t.Fatalf("listed = %+v", listed)
+	}
+	plan, err := svc.RequestRestorePlan(context.Background(), "operator", RequestRestorePlanInput{BackupAlias: "backup-alpha", BackupID: repo.backups[0].ID})
+	if err != nil {
+		t.Fatalf("RequestRestorePlan() error = %v", err)
+	}
+	if plan.Mutable || !plan.RequiresApproval || plan.Backup.ID != repo.backups[0].ID {
+		t.Fatalf("plan = %+v", plan)
+	}
+}
+
+func TestRequestBackupRejectsConcurrentBackup(t *testing.T) {
+	repo := newApprovalRepo()
+	repo.backups = append(repo.backups, backup.Record{ID: "backup_running", BackupAlias: "backup-alpha", Status: backup.StatusRunning})
+	svc := testService(repo, fakeAudit{}, fakeExecutor{})
+	if _, err := svc.RequestBackup(context.Background(), "operator", RequestBackupInput{BackupAlias: "backup-alpha", Reason: "manual"}); err == nil {
+		t.Fatal("RequestBackup() error = nil, want concurrent backup error")
+	}
+}
+
 func testService(approvals ports.ApprovalRepository, audit ports.AuditRepository, executor ports.ExecutorClient) Service {
 	deployments, _ := approvals.(ports.DeploymentRepository)
+	backups, _ := approvals.(ports.BackupRepository)
 	return Service{
 		Config:      ConfigForTest(),
 		Executor:    executor,
 		Approvals:   approvals,
 		Deployments: deployments,
+		Backups:     backups,
 		Audit:       audit,
 		Clock:       fakeClock{now: time.Date(2026, 7, 24, 10, 0, 0, 0, time.UTC)},
 		IDs:         fakeIDs{},
@@ -579,6 +631,17 @@ func ConfigForTest() config.Config {
 				Repository:  config.ApplicationRepositoryConfig{Type: "git", URL: "https://example.invalid/app-service", Branch: "main", Path: "/opt/app-service"},
 				Permissions: config.ApplicationPermissionsConfig{Check: "allow", Update: "confirm", Rollback: "confirm"},
 				Rollback:    config.ApplicationRollbackConfig{Enabled: true, VersionsToKeep: 5},
+			},
+		},
+		Backups: map[string]config.BackupConfig{
+			"backup-alpha": {
+				SourceAlias:    "service-alpha",
+				Description:    "Configured backup",
+				Backend:        "command",
+				Operation:      "/usr/bin/true",
+				Destination:    "/tmp/safeops-backup-alpha",
+				Retention:      config.BackupRetention{KeepLast: 7},
+				IntegrityCheck: true,
 			},
 		},
 	}
@@ -647,6 +710,7 @@ func (a *failAfterAudit) ListAudit(context.Context, int) ([]audit.Event, error) 
 type approvalRepo struct {
 	items       map[string]approval.Approval
 	deployments []deployment.HistoryRecord
+	backups     []backup.Record
 	locked      bool
 }
 
@@ -759,6 +823,56 @@ func (r *approvalRepo) PruneDeployments(_ context.Context, applicationAlias stri
 	return nil
 }
 
+func (r *approvalRepo) AppendBackup(_ context.Context, record backup.Record) error {
+	r.backups = append(r.backups, record)
+	return nil
+}
+
+func (r *approvalRepo) ListBackups(_ context.Context, filter backup.ListFilter, limit int) ([]backup.Record, error) {
+	var out []backup.Record
+	for _, record := range r.backups {
+		if filter.BackupAlias != "" && record.BackupAlias != filter.BackupAlias {
+			continue
+		}
+		if filter.BackupID != "" && record.ID != filter.BackupID {
+			continue
+		}
+		out = append(out, record)
+	}
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
+func (r *approvalRepo) LatestBackup(_ context.Context, backupAlias string) (backup.Record, error) {
+	for i := len(r.backups) - 1; i >= 0; i-- {
+		record := r.backups[i]
+		if backupAlias == "" || record.BackupAlias == backupAlias {
+			return record, nil
+		}
+	}
+	return backup.Record{}, errors.New("not found")
+}
+
+func (r *approvalRepo) GetBackup(_ context.Context, id string) (backup.Record, error) {
+	for _, record := range r.backups {
+		if record.ID == id {
+			return record, nil
+		}
+	}
+	return backup.Record{}, errors.New("not found")
+}
+
+func (r *approvalRepo) BackupInProgress(_ context.Context, backupAlias string) (bool, error) {
+	for _, record := range r.backups {
+		if record.BackupAlias == backupAlias && (record.Status == backup.StatusPending || record.Status == backup.StatusRunning) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 type fakeExecutor struct {
 	restartErr error
 }
@@ -856,6 +970,18 @@ func (fakeExecutor) UpdateApplication(context.Context, ports.UpdateApplicationRe
 }
 func (fakeExecutor) RollbackApplication(context.Context, ports.RollbackApplicationRequest) (ports.ApplicationDeploymentResponse, error) {
 	return ports.ApplicationDeploymentResponse{Status: "success", Action: "rollback_application", Application: "app-service", PreviousVersion: "1.0.1", CurrentVersion: "1.0.0", TargetVersion: "1.0.0", CommitHash: "commit-prev"}, nil
+}
+func (fakeExecutor) CreateBackup(context.Context, ports.CreateBackupRequest) (ports.BackupExecutionResponse, error) {
+	return ports.BackupExecutionResponse{Status: "completed", Action: "create_backup", BackupAlias: "backup-alpha", SourceAlias: "service-alpha", Backend: "command", SnapshotID: "snapshot-alpha", StartTime: "2026-07-24T10:00:00Z", EndTime: "2026-07-24T10:01:00Z", DurationSeconds: 60, SizeBytes: 1024, IntegrityVerified: true}, nil
+}
+func (fakeExecutor) VerifyBackup(context.Context, ports.VerifyBackupRequest) (ports.BackupVerificationResponse, error) {
+	return ports.BackupVerificationResponse{Status: "verified", BackupAlias: "backup-alpha", IntegrityVerified: true, IntegrityCheckedAt: "2026-07-24T10:01:00Z"}, nil
+}
+func (fakeExecutor) ApplyRetentionPolicy(context.Context, ports.ApplyRetentionPolicyRequest) (ports.ApplyRetentionPolicyResponse, error) {
+	return ports.ApplyRetentionPolicyResponse{Status: "completed", BackupAlias: "backup-alpha", RetentionSet: true}, nil
+}
+func (fakeExecutor) GenerateRestorePlan(context.Context, ports.RestorePlanRequest) (ports.RestorePlanResponse, error) {
+	return ports.RestorePlanResponse{PlanID: "plan_1", Steps: []string{"Review backup metadata."}, RequiresApproval: true}, nil
 }
 
 type recordingExecutor struct {

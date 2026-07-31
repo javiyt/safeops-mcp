@@ -10,6 +10,7 @@ import (
 	"github.com/javiyt/safeops-mcp/internal/domain/alert"
 	"github.com/javiyt/safeops-mcp/internal/domain/approval"
 	"github.com/javiyt/safeops-mcp/internal/domain/audit"
+	"github.com/javiyt/safeops-mcp/internal/domain/backup"
 	"github.com/javiyt/safeops-mcp/internal/domain/deployment"
 	"github.com/javiyt/safeops-mcp/internal/ports"
 	"github.com/javiyt/safeops-mcp/migrations"
@@ -371,6 +372,154 @@ func scanDeployment(scanner interface {
 	record.DeployedAt, _ = time.Parse(time.RFC3339Nano, deployedAt)
 	record.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdAt)
 	return record, nil
+}
+
+func (s *Store) AppendBackup(ctx context.Context, record backup.Record) error {
+	var endTime, integrityCheckedAt any
+	if record.EndTime != nil {
+		endTime = formatTime(*record.EndTime)
+	}
+	if record.IntegrityCheckedAt != nil {
+		integrityCheckedAt = formatTime(*record.IntegrityCheckedAt)
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO backups
+(id, backup_alias, source_alias, backend, snapshot_id, status, start_time, end_time, duration_seconds, size_bytes, integrity_verified, integrity_checked_at, error_message, metadata, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		record.ID,
+		record.BackupAlias,
+		record.SourceAlias,
+		record.Backend,
+		record.SnapshotID,
+		record.Status,
+		formatTime(record.StartTime),
+		endTime,
+		record.DurationSeconds,
+		record.SizeBytes,
+		boolToInt(record.IntegrityVerified),
+		integrityCheckedAt,
+		record.ErrorMessage,
+		record.Metadata,
+		formatTime(record.CreatedAt),
+	)
+	return err
+}
+
+func (s *Store) ListBackups(ctx context.Context, filter backup.ListFilter, limit int) ([]backup.Record, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	query := `SELECT id, backup_alias, source_alias, backend, snapshot_id, status, start_time, end_time, duration_seconds, size_bytes, integrity_verified, integrity_checked_at, error_message, metadata, created_at FROM backups`
+	var args []any
+	switch {
+	case filter.BackupID != "":
+		query += ` WHERE id = ?`
+		args = append(args, filter.BackupID)
+	case filter.BackupAlias != "":
+		query += ` WHERE backup_alias = ?`
+		args = append(args, filter.BackupAlias)
+	}
+	query += ` ORDER BY start_time DESC LIMIT ?`
+	args = append(args, limit)
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []backup.Record
+	for rows.Next() {
+		record, err := scanBackup(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, record)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) LatestBackup(ctx context.Context, backupAlias string) (backup.Record, error) {
+	query := `SELECT id, backup_alias, source_alias, backend, snapshot_id, status, start_time, end_time, duration_seconds, size_bytes, integrity_verified, integrity_checked_at, error_message, metadata, created_at FROM backups`
+	var args []any
+	if backupAlias != "" {
+		query += ` WHERE backup_alias = ?`
+		args = append(args, backupAlias)
+	}
+	query += ` ORDER BY start_time DESC LIMIT 1`
+	row := s.db.QueryRowContext(ctx, query, args...)
+	return scanBackup(row)
+}
+
+func (s *Store) GetBackup(ctx context.Context, id string) (backup.Record, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT id, backup_alias, source_alias, backend, snapshot_id, status, start_time, end_time, duration_seconds, size_bytes, integrity_verified, integrity_checked_at, error_message, metadata, created_at FROM backups WHERE id = ?`, id)
+	return scanBackup(row)
+}
+
+func (s *Store) BackupInProgress(ctx context.Context, backupAlias string) (bool, error) {
+	var count int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM backups WHERE backup_alias = ? AND status IN ('pending', 'running')`, backupAlias).Scan(&count)
+	return count > 0, err
+}
+
+func scanBackup(scanner interface {
+	Scan(dest ...any) error
+}) (backup.Record, error) {
+	var record backup.Record
+	var status string
+	var startTime, createdAt string
+	var endTime, integrityCheckedAt sql.NullString
+	var integrityVerified int
+	if err := scanner.Scan(
+		&record.ID,
+		&record.BackupAlias,
+		&record.SourceAlias,
+		&record.Backend,
+		&record.SnapshotID,
+		&status,
+		&startTime,
+		&endTime,
+		&record.DurationSeconds,
+		&record.SizeBytes,
+		&integrityVerified,
+		&integrityCheckedAt,
+		&record.ErrorMessage,
+		&record.Metadata,
+		&createdAt,
+	); err != nil {
+		return backup.Record{}, err
+	}
+	parsedStart, err := parseTime(startTime)
+	if err != nil {
+		return backup.Record{}, err
+	}
+	parsedCreated, err := parseTime(createdAt)
+	if err != nil {
+		return backup.Record{}, err
+	}
+	record.StartTime = parsedStart
+	record.CreatedAt = parsedCreated
+	record.Status = backup.Status(status)
+	record.IntegrityVerified = integrityVerified == 1
+	if endTime.Valid && endTime.String != "" {
+		parsed, err := parseTime(endTime.String)
+		if err != nil {
+			return backup.Record{}, err
+		}
+		record.EndTime = &parsed
+	}
+	if integrityCheckedAt.Valid && integrityCheckedAt.String != "" {
+		parsed, err := parseTime(integrityCheckedAt.String)
+		if err != nil {
+			return backup.Record{}, err
+		}
+		record.IntegrityCheckedAt = &parsed
+	}
+	return record, nil
+}
+
+func boolToInt(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
 }
 
 func (s *Store) Append(ctx context.Context, e audit.Event) error {

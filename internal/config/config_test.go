@@ -85,6 +85,49 @@ func TestValidateHealthcheckRules(t *testing.T) {
 	}
 }
 
+func TestValidateBackupsConfiguration(t *testing.T) {
+	cfg := validConfig()
+	cfg.Backups = map[string]BackupConfig{
+		"backup-alpha": {
+			SourceAlias:    "service-alpha",
+			Description:    "Configured backup",
+			Backend:        "command",
+			Operation:      "/usr/bin/tar -czf /tmp/app-config.tar.gz /etc/app-service",
+			Destination:    "/mnt/backups/app-service",
+			Retention:      BackupRetention{KeepLast: 7},
+			Limits:         BackupLimits{MaxSizeGB: 50, Timeout: Duration(30 * time.Minute)},
+			IntegrityCheck: true,
+			PreCommands:    []string{"/usr/bin/systemctl stop app-alpha.service"},
+			PostCommands:   []string{"/usr/bin/systemctl start app-alpha.service"},
+		},
+		"backup-beta": {
+			Backend:      "restic",
+			Repository:   "/mnt/backups/restic",
+			PasswordFile: "/etc/safeops/restic-password",
+			SourcePath:   "/var/lib/app-service",
+			Retention:    BackupRetention{KeepLast: 7, KeepDaily: 30},
+		},
+	}
+	if err := Validate(cfg); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
+func TestValidateRejectsUnsafeBackupCommand(t *testing.T) {
+	cfg := validConfig()
+	cfg.Backups = map[string]BackupConfig{
+		"backup-alpha": {
+			SourceAlias: "service-alpha",
+			Backend:     "command",
+			Operation:   "/usr/bin/tar -czf /tmp/app.tar.gz /etc/app-service; /usr/bin/id",
+			Destination: "/mnt/backups/app-service",
+		},
+	}
+	if err := Validate(cfg); err == nil {
+		t.Fatal("Validate() error = nil, want unsafe backup command error")
+	}
+}
+
 func TestValidateRejectsInvalidPolicyAndLimits(t *testing.T) {
 	cfg := validConfig()
 	cfg.Server.Name = ""

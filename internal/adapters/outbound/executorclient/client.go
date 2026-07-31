@@ -171,6 +171,26 @@ func (c Client) RollbackApplication(ctx context.Context, req ports.RollbackAppli
 	return out, c.post(ctx, "/v1/applications/rollback", req, &out)
 }
 
+func (c Client) CreateBackup(ctx context.Context, req ports.CreateBackupRequest) (ports.BackupExecutionResponse, error) {
+	var out ports.BackupExecutionResponse
+	return out, c.post(ctx, "/v1/backups/create", req, &out)
+}
+
+func (c Client) VerifyBackup(ctx context.Context, req ports.VerifyBackupRequest) (ports.BackupVerificationResponse, error) {
+	var out ports.BackupVerificationResponse
+	return out, c.post(ctx, "/v1/backups/verify", req, &out)
+}
+
+func (c Client) ApplyRetentionPolicy(ctx context.Context, req ports.ApplyRetentionPolicyRequest) (ports.ApplyRetentionPolicyResponse, error) {
+	var out ports.ApplyRetentionPolicyResponse
+	return out, c.post(ctx, "/v1/backups/retention", req, &out)
+}
+
+func (c Client) GenerateRestorePlan(ctx context.Context, req ports.RestorePlanRequest) (ports.RestorePlanResponse, error) {
+	var out ports.RestorePlanResponse
+	return out, c.post(ctx, "/v1/backups/restore-plan", req, &out)
+}
+
 func (c Client) get(ctx context.Context, path string, out any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://unix"+path, nil)
 	if err != nil {

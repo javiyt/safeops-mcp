@@ -30,6 +30,7 @@ type Config struct {
 	Containers      map[string]ContainerConfig   `yaml:"containers"`
 	Groups          map[string]GroupConfig       `yaml:"groups"`
 	Applications    map[string]ApplicationConfig `yaml:"applications"`
+	Backups         map[string]BackupConfig      `yaml:"backups"`
 	LogRotation     LogRotationConfig            `yaml:"log_rotation"`
 	CacheCleanup    CacheCleanupConfig           `yaml:"cache_cleanup"`
 	AuditRetention  Duration                     `yaml:"audit_retention"`
@@ -322,6 +323,53 @@ type ApplicationCommandConfig struct {
 	Command string   `yaml:"command"`
 	Args    []string `yaml:"args"`
 	Dir     string   `yaml:"dir"`
+}
+
+type BackupConfig struct {
+	SourceAlias    string          `yaml:"source_alias"`
+	Description    string          `yaml:"description"`
+	Backend        string          `yaml:"backend"`
+	Profile        string          `yaml:"profile"`
+	Repository     string          `yaml:"repository"`
+	PasswordFile   string          `yaml:"password_file"`
+	SourcePath     string          `yaml:"source_path"`
+	Operation      string          `yaml:"operation"`
+	Destination    string          `yaml:"destination"`
+	Retention      BackupRetention `yaml:"retention"`
+	Limits         BackupLimits    `yaml:"limits"`
+	IntegrityCheck bool            `yaml:"integrity_check"`
+	PreCommands    []string        `yaml:"pre_commands"`
+	PostCommands   []string        `yaml:"post_commands"`
+}
+
+type BackupRetention struct {
+	KeepLast   int `yaml:"keep_last"`
+	KeepHourly int `yaml:"keep_hourly"`
+	KeepDaily  int `yaml:"keep_daily"`
+	KeepWeekly int `yaml:"keep_weekly"`
+}
+
+func (r *BackupRetention) UnmarshalYAML(value *yaml.Node) error {
+	if value.Kind == yaml.ScalarNode {
+		var keep int
+		if err := value.Decode(&keep); err != nil {
+			return err
+		}
+		r.KeepLast = keep
+		return nil
+	}
+	type rawRetention BackupRetention
+	var out rawRetention
+	if err := value.Decode(&out); err != nil {
+		return err
+	}
+	*r = BackupRetention(out)
+	return nil
+}
+
+type BackupLimits struct {
+	MaxSizeGB float64  `yaml:"max_size_gb"`
+	Timeout   Duration `yaml:"timeout"`
 }
 
 type ResourceCleanupConfig struct {
@@ -664,6 +712,7 @@ func Validate(cfg Config) error {
 	validateDiagnostics(&errs, cfg)
 	validateAlerts(&errs, cfg)
 	validateMaintenance(&errs, cfg)
+	validateBackups(&errs, cfg)
 	for alias := range cfg.Services {
 		if _, ok := cfg.Containers[alias]; ok {
 			errs = append(errs, fmt.Errorf("alias %q is ambiguous between services and containers", alias))
@@ -687,6 +736,91 @@ func Validate(cfg Config) error {
 	validateTelegram(&errs, cfg)
 	validatePodman(&errs, cfg)
 	return errors.Join(errs...)
+}
+
+func validateBackups(errs *[]error, cfg Config) {
+	for alias, backup := range cfg.Backups {
+		if !validAlias(alias) {
+			*errs = append(*errs, fmt.Errorf("backups[%q] has an invalid alias", alias))
+		}
+		if backup.SourceAlias != "" && !cfg.hasResource(backup.SourceAlias) {
+			*errs = append(*errs, fmt.Errorf("backups[%q].source_alias references unknown resource %q", alias, backup.SourceAlias))
+		}
+		switch backup.Backend {
+		case "restic":
+			if backup.Repository == "" {
+				*errs = append(*errs, fmt.Errorf("backups[%q].repository is required for restic", alias))
+			}
+			if !isPathOrURL(backup.Repository) {
+				*errs = append(*errs, fmt.Errorf("backups[%q].repository must be an absolute path or URL", alias))
+			}
+			if backup.PasswordFile == "" || !filepath.IsAbs(backup.PasswordFile) {
+				*errs = append(*errs, fmt.Errorf("backups[%q].password_file must be absolute for restic", alias))
+			}
+			if backup.SourcePath == "" || !filepath.IsAbs(backup.SourcePath) {
+				*errs = append(*errs, fmt.Errorf("backups[%q].source_path must be absolute for restic", alias))
+			}
+		case "command":
+			if backup.Operation == "" {
+				*errs = append(*errs, fmt.Errorf("backups[%q].operation is required for command backend", alias))
+			}
+			if backup.Destination == "" || !filepath.IsAbs(backup.Destination) {
+				*errs = append(*errs, fmt.Errorf("backups[%q].destination must be absolute for command backend", alias))
+			}
+			if isBroadBackupDestination(backup.Destination) {
+				*errs = append(*errs, fmt.Errorf("backups[%q].destination is too broad", alias))
+			}
+			validateLiteralCommand(errs, "backups["+alias+"].operation", backup.Operation)
+		default:
+			*errs = append(*errs, fmt.Errorf("backups[%q].backend must be restic or command", alias))
+		}
+		if backup.Limits.MaxSizeGB < 0 {
+			*errs = append(*errs, fmt.Errorf("backups[%q].limits.max_size_gb must not be negative", alias))
+		}
+		if backup.Limits.Timeout.Std() < 0 {
+			*errs = append(*errs, fmt.Errorf("backups[%q].limits.timeout must not be negative", alias))
+		}
+		if backup.Retention.KeepLast < 0 || backup.Retention.KeepHourly < 0 || backup.Retention.KeepDaily < 0 || backup.Retention.KeepWeekly < 0 {
+			*errs = append(*errs, fmt.Errorf("backups[%q].retention values must not be negative", alias))
+		}
+		for i, cmd := range backup.PreCommands {
+			validateLiteralCommand(errs, fmt.Sprintf("backups[%s].pre_commands[%d]", alias, i), cmd)
+		}
+		for i, cmd := range backup.PostCommands {
+			validateLiteralCommand(errs, fmt.Sprintf("backups[%s].post_commands[%d]", alias, i), cmd)
+		}
+	}
+}
+
+func validateLiteralCommand(errs *[]error, field, command string) {
+	if strings.TrimSpace(command) == "" {
+		*errs = append(*errs, fmt.Errorf("%s must not be empty", field))
+		return
+	}
+	if strings.ContainsAny(command, "|;&<>`$\\\n\r") {
+		*errs = append(*errs, fmt.Errorf("%s contains shell metacharacters", field))
+	}
+	if strings.Contains(command, "..") {
+		*errs = append(*errs, fmt.Errorf("%s must not contain parent directory traversal", field))
+	}
+}
+
+func isPathOrURL(value string) bool {
+	if filepath.IsAbs(value) {
+		return true
+	}
+	parsed, err := url.Parse(value)
+	return err == nil && parsed.Scheme != "" && parsed.Host != ""
+}
+
+func isBroadBackupDestination(path string) bool {
+	clean := filepath.Clean(path)
+	switch clean {
+	case "/", "/tmp", "/var", "/var/tmp", "/home", "/etc", "/mnt", "/opt":
+		return true
+	default:
+		return false
+	}
 }
 
 func validateMaintenance(errs *[]error, cfg Config) {

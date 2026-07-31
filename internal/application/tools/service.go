@@ -16,6 +16,7 @@ import (
 	"github.com/javiyt/safeops-mcp/internal/domain/alert"
 	"github.com/javiyt/safeops-mcp/internal/domain/approval"
 	"github.com/javiyt/safeops-mcp/internal/domain/audit"
+	"github.com/javiyt/safeops-mcp/internal/domain/backup"
 	"github.com/javiyt/safeops-mcp/internal/domain/deployment"
 	"github.com/javiyt/safeops-mcp/internal/domain/policy"
 	"github.com/javiyt/safeops-mcp/internal/ports"
@@ -28,6 +29,7 @@ type Service struct {
 	Approvals   ports.ApprovalRepository
 	Alerts      ports.AlertRepository
 	Deployments ports.DeploymentRepository
+	Backups     ports.BackupRepository
 	Audit       ports.AuditRepository
 	Clock       ports.Clock
 	IDs         ports.IDGenerator
@@ -94,6 +96,31 @@ type RequestApplicationRollbackInput struct {
 	Application string `json:"application"`
 	Reason      string `json:"reason"`
 	Version     string `json:"version"`
+}
+
+type BackupAliasInput struct {
+	BackupAlias string `json:"backup_alias"`
+}
+
+type BackupStatusInput struct {
+	BackupAlias string `json:"backup_alias"`
+	BackupID    string `json:"backup_id"`
+}
+
+type BackupHistoryInput struct {
+	BackupAlias string `json:"backup_alias"`
+	Limit       int    `json:"limit"`
+}
+
+type RequestBackupInput struct {
+	BackupAlias string `json:"backup_alias"`
+	Reason      string `json:"reason"`
+}
+
+type RequestRestorePlanInput struct {
+	BackupAlias string `json:"backup_alias"`
+	BackupID    string `json:"backup_id"`
+	Target      string `json:"target"`
 }
 
 type RequestRestartOutput struct {
@@ -357,6 +384,117 @@ func (s Service) ApplicationHistory(ctx context.Context, userID string, input Ap
 	return map[string][]deployment.HistoryRecord{"history": items}, err
 }
 
+func (s Service) ListBackups(ctx context.Context, userID string, input BackupAliasInput) (map[string]any, error) {
+	if err := s.validateBackupConfigured(input.BackupAlias, true); err != nil {
+		return nil, err
+	}
+	if s.Backups == nil {
+		return nil, errors.New("backup repository is not configured")
+	}
+	items, err := s.Backups.ListBackups(ctx, backup.ListFilter{BackupAlias: input.BackupAlias}, 100)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.audit(ctx, userID, "backups_listed", "list_backups", "list_backups", fmt.Sprintf(`{"backup_alias":%q}`, input.BackupAlias), "read", "allow", "completed", "", ""); err != nil {
+		return nil, err
+	}
+	return map[string]any{"backups": backupSummaries(items), "total": len(items)}, nil
+}
+
+func (s Service) BackupStatus(ctx context.Context, userID string, input BackupStatusInput) (backup.Record, error) {
+	if err := s.validateBackupConfigured(input.BackupAlias, input.BackupID == ""); err != nil {
+		return backup.Record{}, err
+	}
+	if s.Backups == nil {
+		return backup.Record{}, errors.New("backup repository is not configured")
+	}
+	var record backup.Record
+	var err error
+	if input.BackupID != "" {
+		record, err = s.Backups.GetBackup(ctx, input.BackupID)
+	} else {
+		record, err = s.Backups.LatestBackup(ctx, input.BackupAlias)
+	}
+	if err != nil {
+		return backup.Record{}, err
+	}
+	if input.BackupAlias != "" && record.BackupAlias != input.BackupAlias {
+		return backup.Record{}, errors.New("backup_id does not belong to backup_alias")
+	}
+	if err := s.audit(ctx, userID, "backup_status_read", "backup_status", "backup_status", fmt.Sprintf(`{"backup_alias":%q,"backup_id":%q}`, input.BackupAlias, input.BackupID), "read", "allow", "completed", "", ""); err != nil {
+		return backup.Record{}, err
+	}
+	return record, nil
+}
+
+func (s Service) BackupHistory(ctx context.Context, userID string, input BackupHistoryInput) (map[string]any, error) {
+	if input.Limit <= 0 || input.Limit > 100 {
+		input.Limit = 20
+	}
+	if err := s.validateBackupConfigured(input.BackupAlias, false); err != nil {
+		return nil, err
+	}
+	if s.Backups == nil {
+		return nil, errors.New("backup repository is not configured")
+	}
+	items, err := s.Backups.ListBackups(ctx, backup.ListFilter{BackupAlias: input.BackupAlias}, input.Limit)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.audit(ctx, userID, "backup_history_read", "backup_history", "backup_history", fmt.Sprintf(`{"backup_alias":%q,"limit":%d}`, input.BackupAlias, input.Limit), "read", "allow", "completed", "", ""); err != nil {
+		return nil, err
+	}
+	return map[string]any{"history": items, "total": len(items)}, nil
+}
+
+func (s Service) RequestBackup(ctx context.Context, userID string, input RequestBackupInput) (RequestRestartOutput, error) {
+	if err := s.validateBackupConfigured(input.BackupAlias, false); err != nil {
+		return RequestRestartOutput{}, err
+	}
+	if s.Backups != nil {
+		running, err := s.Backups.BackupInProgress(ctx, input.BackupAlias)
+		if err != nil {
+			return RequestRestartOutput{}, err
+		}
+		if running {
+			return RequestRestartOutput{}, fmt.Errorf("backup %q already has a running operation", input.BackupAlias)
+		}
+	}
+	return s.requestApproval(ctx, userID, "request_backup", action.TypeCreateBackup, action.ResourceBackup, input.BackupAlias, input.Reason, nil, "high", "Create backup "+input.BackupAlias, "The backup may take a few minutes. Configured pre and post commands may briefly stop affected resources.")
+}
+
+func (s Service) RequestRestorePlan(ctx context.Context, userID string, input RequestRestorePlanInput) (ports.RestorePlanResponse, error) {
+	if err := s.validateBackupConfigured(input.BackupAlias, false); err != nil {
+		return ports.RestorePlanResponse{}, err
+	}
+	if s.Backups == nil {
+		return ports.RestorePlanResponse{}, errors.New("backup repository is not configured")
+	}
+	record, err := s.Backups.GetBackup(ctx, input.BackupID)
+	if err != nil {
+		return ports.RestorePlanResponse{}, err
+	}
+	if record.BackupAlias != input.BackupAlias {
+		return ports.RestorePlanResponse{}, errors.New("backup_id does not belong to backup_alias")
+	}
+	out, err := s.Executor.GenerateRestorePlan(ctx, ports.RestorePlanRequest{BackupAlias: input.BackupAlias, BackupID: input.BackupID, SnapshotID: record.SnapshotID, Target: input.Target})
+	if err != nil {
+		return ports.RestorePlanResponse{}, err
+	}
+	out.Backup = ports.RestorePlanBackup{
+		ID:        record.ID,
+		Alias:     record.BackupAlias,
+		Snapshot:  record.SnapshotID,
+		CreatedAt: record.StartTime.UTC().Format(time.RFC3339),
+		SizeGB:    float64(record.SizeBytes) / 1_073_741_824,
+		Integrity: record.IntegrityVerified,
+	}
+	if err := s.audit(ctx, userID, "backup_restore_plan_generated", "request_restore_plan", "generate_restore_plan", fmt.Sprintf(`{"backup_alias":%q,"backup_id":%q,"target":%q}`, input.BackupAlias, input.BackupID, input.Target), "read", "allow", "completed", "", ""); err != nil {
+		return ports.RestorePlanResponse{}, err
+	}
+	return out, nil
+}
+
 func (s Service) ServiceStatus(ctx context.Context, alias string) (any, error) {
 	if !s.permission(alias, "status", "allow") {
 		return nil, fmt.Errorf("service %q is not allowed for status", alias)
@@ -614,6 +752,9 @@ func (s Service) ConfirmAction(ctx context.Context, userID string, input Confirm
 	if err == nil {
 		err = s.recordDeploymentResult(ctx, userID, a, out)
 	}
+	if backupErr := s.recordBackupResult(ctx, a, out); backupErr != nil && err == nil {
+		err = backupErr
+	}
 	status := approval.StatusExecuted
 	errorSummary := ""
 	resultSummary := string(action.Type(a.Action)) + " executed"
@@ -701,6 +842,13 @@ func (s Service) executeApproved(ctx context.Context, a approval.Approval, opID 
 			TriggeredBy:   a.UserID,
 			DryRun:        s.Config.Policies.DryRun,
 		})
+	case action.TypeCreateBackup:
+		return s.Executor.CreateBackup(ctx, ports.CreateBackupRequest{
+			BackupAlias: a.ResourceAlias,
+			OperationID: opID,
+			TriggeredBy: a.UserID,
+			DryRun:      s.Config.Policies.DryRun,
+		})
 	default:
 		return nil, fmt.Errorf("action %q is not supported", a.Action)
 	}
@@ -727,6 +875,8 @@ func confirmOutput(out any) ConfirmOutput {
 		return ConfirmOutput{Status: v.Status, Action: v.Action, ResourceKind: "host", Resource: "host", Result: v, WouldRun: v.WouldRun}
 	case ports.ApplicationDeploymentResponse:
 		return ConfirmOutput{Status: v.Status, Action: v.Action, ResourceKind: "application", Resource: v.Application, Result: v, WouldRun: strings.Join(v.WouldRun, "\n")}
+	case ports.BackupExecutionResponse:
+		return ConfirmOutput{Status: v.Status, Action: v.Action, ResourceKind: "backup", Resource: v.BackupAlias, Result: v, WouldRun: strings.Join(v.WouldRun, "\n")}
 	default:
 		return ConfirmOutput{Status: "unknown"}
 	}
@@ -949,6 +1099,10 @@ func (s Service) validateActionAllowed(kind action.ResourceKind, alias string) e
 		if !ok || app.Kind == "" {
 			return fmt.Errorf("application %q is not configured for deployments", alias)
 		}
+	case action.ResourceBackup:
+		if _, ok := s.Config.Backups[alias]; !ok {
+			return fmt.Errorf("backup %q is not configured", alias)
+		}
 	default:
 		return fmt.Errorf("resource kind %q is not supported", kind)
 	}
@@ -1033,6 +1187,83 @@ func (s Service) recordDeploymentResult(ctx context.Context, userID string, a ap
 	return nil
 }
 
+func (s Service) recordBackupResult(ctx context.Context, a approval.Approval, out any) error {
+	result, ok := out.(ports.BackupExecutionResponse)
+	if !ok || s.Backups == nil || s.Config.Policies.DryRun {
+		return nil
+	}
+	id, err := s.IDs.NewID("backup")
+	if err != nil {
+		return err
+	}
+	startTime, err := time.Parse(time.RFC3339, result.StartTime)
+	if err != nil {
+		startTime = s.Clock.Now()
+	}
+	var endTime *time.Time
+	if result.EndTime != "" {
+		parsed, err := time.Parse(time.RFC3339, result.EndTime)
+		if err == nil {
+			endTime = &parsed
+		}
+	}
+	var checkedAt *time.Time
+	if result.IntegrityCheckedAt != "" {
+		parsed, err := time.Parse(time.RFC3339, result.IntegrityCheckedAt)
+		if err == nil {
+			checkedAt = &parsed
+		}
+	}
+	metadata, _ := json.Marshal(result.Metadata)
+	status := backup.StatusCompleted
+	switch result.Status {
+	case "failed":
+		status = backup.StatusFailed
+	case "verified":
+		status = backup.StatusVerified
+	case "running":
+		status = backup.StatusRunning
+	case "pending":
+		status = backup.StatusPending
+	}
+	if result.IntegrityVerified {
+		status = backup.StatusVerified
+	}
+	record := backup.Record{
+		ID:                 id,
+		BackupAlias:        a.ResourceAlias,
+		SourceAlias:        result.SourceAlias,
+		Backend:            result.Backend,
+		SnapshotID:         result.SnapshotID,
+		Status:             status,
+		StartTime:          startTime,
+		EndTime:            endTime,
+		DurationSeconds:    result.DurationSeconds,
+		SizeBytes:          result.SizeBytes,
+		IntegrityVerified:  result.IntegrityVerified,
+		IntegrityCheckedAt: checkedAt,
+		ErrorMessage:       redaction.Redact(result.ErrorMessage),
+		Metadata:           redaction.Redact(string(metadata)),
+		CreatedAt:          s.Clock.Now(),
+	}
+	if err := s.Backups.AppendBackup(ctx, record); err != nil {
+		return err
+	}
+	if s.Alerts != nil && (record.Status == backup.StatusFailed || (result.IntegrityCheckedAt != "" && !record.IntegrityVerified)) {
+		finding := alert.Finding{
+			ResourceKind:  "backup",
+			ResourceAlias: record.BackupAlias,
+			Type:          "backup_failed",
+			Severity:      alert.SeverityCritical,
+			Message:       "Backup " + record.BackupAlias + " failed or did not pass integrity verification.",
+			Metadata:      redaction.Redact(record.Metadata),
+		}
+		_, _, err := s.Alerts.UpsertObserved(ctx, finding, s.Clock.Now())
+		return err
+	}
+	return nil
+}
+
 func (s Service) recordsLimits(input RemoveExpiredSafeOpsRecordsInput) (time.Duration, int, error) {
 	maxAge := s.Config.AuditRetention.Std()
 	if strings.TrimSpace(input.MaxAge) != "" {
@@ -1078,6 +1309,36 @@ func containsString(values []string, target string) bool {
 		}
 	}
 	return false
+}
+
+func (s Service) validateBackupConfigured(alias string, allowEmpty bool) error {
+	if alias == "" && allowEmpty {
+		return nil
+	}
+	if _, ok := s.Config.Backups[alias]; !ok {
+		return fmt.Errorf("backup %q is not configured", alias)
+	}
+	return nil
+}
+
+func backupSummaries(items []backup.Record) []map[string]any {
+	out := make([]map[string]any, 0, len(items))
+	for _, item := range items {
+		summary := map[string]any{
+			"id":          item.ID,
+			"alias":       item.BackupAlias,
+			"snapshot_id": item.SnapshotID,
+			"status":      item.Status,
+			"start_time":  item.StartTime.UTC().Format(time.RFC3339),
+			"size_gb":     float64(item.SizeBytes) / 1_073_741_824,
+			"integrity":   item.IntegrityVerified,
+		}
+		if item.EndTime != nil {
+			summary["end_time"] = item.EndTime.UTC().Format(time.RFC3339)
+		}
+		out = append(out, summary)
+	}
+	return out
 }
 
 func stringExtra(values map[string]any, key string) string {
